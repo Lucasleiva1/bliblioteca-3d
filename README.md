@@ -7,7 +7,7 @@ Aplicación nativa de Windows para recorrer carpetas y previsualizar animaciones
 - Elegir y recordar una carpeta de biblioteca.
 - Usar `D:\\biblioteca-3d` automáticamente como biblioteca inicial cuando exista.
 - Árbol recursivo con carpetas vacías, conteos, volver y subir de nivel.
-- Tabla inferior con carpetas, animaciones y archivos auxiliares.
+- Espacio de trabajo de tres columnas a pantalla completa: categorías, visor y catálogo de miniaturas.
 - Abrir carpetas y revelar archivos en el Explorador de Windows.
 - Catálogo individual de archivos FBX, GLB y GLTF.
 - GLTF con archivos `.bin` e imágenes locales, validados dentro de la biblioteca.
@@ -15,6 +15,7 @@ Aplicación nativa de Windows para recorrer carpetas y previsualizar animaciones
 - Búsqueda, vistas compacta/grilla/lista y favoritas.
 - Catálogo paginado de 24 elementos, filtros de formato y orden, y clasificación por arrastre.
 - Categorías y metadatos SQLite por animación: nombre para juego, subcategoría, etiquetas y descripción, sin modificar el archivo original.
+- Los metadatos se editan en un panel flotante que se abre desde cada tarjeta y se cierra con `Escape`.
 - Nombre, logo y tema configurables para permitir otras marcas.
 - Respaldo, restauración protegida, exportación JSON y diagnóstico local.
 - Atajos: `Ctrl+F` busca, flechas arriba/abajo recorren animaciones y `Escape` cierra paneles flotantes.

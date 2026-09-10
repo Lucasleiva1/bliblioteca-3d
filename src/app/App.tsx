@@ -277,7 +277,7 @@ export default function App() {
   const [draggedAssetId, setDraggedAssetId] = useState<string | null>(null);
   const [categoryDropId, setCategoryDropId] = useState<string | null>(null);
   const [catalogData, setCatalogData] = useState<CatalogData>(EMPTY_CATALOG);
-  const [bottomTab, setBottomTab] = useState<"files" | "metadata">("files");
+  const [metadataOpen, setMetadataOpen] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<AnimationMetadata>(() => emptyMetadata());
   const [metadataSaving, setMetadataSaving] = useState(false);
   const [metadataSaved, setMetadataSaved] = useState(false);
@@ -304,6 +304,7 @@ export default function App() {
         if (event.key !== "Escape") return;
         setFolderPanelOpen(false);
         setCatalogOptionsOpen(false);
+        setMetadataOpen(false);
         return;
       }
       const target = event.target as HTMLElement | null;
@@ -603,7 +604,7 @@ export default function App() {
         setCatalogOptionsOpen(false);
         return;
       }
-      if (editing || settingsOpen) return;
+      if (editing || settingsOpen || metadataOpen) return;
       if (event.key === "ArrowUp") {
         event.preventDefault();
         selectRelative(-1);
@@ -632,7 +633,16 @@ export default function App() {
       {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError(null)} title="Cerrar"><X size={16} /></button></div>}
       {folderPanelOpen && library.rootPath && (
         <section className="library-strip" aria-label="Carpetas de la biblioteca">
-          <div className="panel-heading"><span>BIBLIOTECA</span><small>{library.folders.length} carpetas</small></div>
+          <div className="panel-heading">
+            <span>BIBLIOTECA</span>
+            <em className="strip-path" title={folderContents?.path || library.rootPath}>{folderContents?.relativePath ? folderContents.relativePath.replaceAll("\\", "  /  ") : "raíz"}</em>
+            <div className="panel-heading-actions">
+              <button onClick={goBack} disabled={historyIndex <= 0} title="Volver a la carpeta anterior" aria-label="Volver a la carpeta anterior"><ArrowLeft size={14} /></button>
+              <button onClick={goUp} disabled={!folderContents?.relativePath} title="Subir una carpeta" aria-label="Subir una carpeta"><ArrowUp size={14} /></button>
+              <button onClick={() => folderContents?.path && openFolder(folderContents.path)} disabled={!folderContents?.path} title="Abrir esta carpeta en Windows" aria-label="Abrir esta carpeta en Windows"><FolderOpen size={14} /></button>
+              <small>{library.folders.length} carpetas</small>
+            </div>
+          </div>
           <button className={folderContents?.path === library.rootPath && catalogMode === "folder" ? "root-folder active" : "root-folder"} onClick={() => navigateFolder(library.rootPath)}>
             <FolderOpen size={17} /><span>{rootLabel}</span><small>{library.animations.length}</small>
           </button>
@@ -659,13 +669,6 @@ export default function App() {
           <div className="category-status"><span>{visibleAnimations.length} visibles</span></div>
         </aside>
         <section className="center-column">
-          <div className="breadcrumb">
-            <button onClick={goBack} disabled={historyIndex <= 0} title="Volver a la carpeta anterior"><ArrowLeft size={15} /></button>
-            <button onClick={goUp} disabled={!folderContents?.relativePath} title="Subir una carpeta"><ArrowUp size={15} /></button>
-            <Folder size={15} />
-            <span>{folderContents?.relativePath ? `${rootLabel}  /  ${folderContents.relativePath.replaceAll("\\", "  /  ")}` : rootLabel}</span>
-            {folderContents?.path && <button onClick={() => openFolder(folderContents.path)} title="Abrir esta carpeta en Windows"><FolderOpen size={15} /></button>}
-          </div>
           <Viewer3D asset={selected} characterBody={characterBody} characterBones={characterBones} autoplay={autoplay} onPrevious={() => selectRelative(-1)} onNext={() => selectRelative(1)} canPrevious={selectedIndex > 0} canNext={selectedIndex >= 0 && selectedIndex < visibleAnimations.length - 1} />
         </section>
         <aside className="right-panel">
@@ -692,6 +695,7 @@ export default function App() {
                 <div className={`animation-thumb format-${asset.format}`}><img src={thumbnailForAnimation(asset.fileName)} alt={`Boceto de ${asset.name}`} loading="lazy" /><span>{asset.format.toUpperCase()}</span></div>
                 <div className="animation-meta"><strong title={asset.fileName}>{metadataById.get(asset.id)?.gameName || asset.name}</strong><span>{metadataById.get(asset.id)?.gameName ? `${asset.name} · ` : ""}{formatBytes(asset.size)} · {asset.format.toUpperCase()}</span></div>
                 <div className="animation-actions">
+                  <button draggable={false} onClick={(event) => { event.stopPropagation(); setSelected(asset); setMetadataSaved(false); setMetadataOpen(true); }} title="Editar metadatos" aria-label={`Editar metadatos de ${asset.name}`}><Sparkles size={15} /></button>
                   <button draggable={false} onClick={(event) => { event.stopPropagation(); void revealAnimation(asset); }} title="Abrir carpeta y seleccionar este archivo" aria-label={`Abrir carpeta y seleccionar ${asset.fileName}`}><FolderOpen size={15} /></button>
                   <button draggable={false} className={favoriteIds.has(asset.id) ? "favorite active" : "favorite"} aria-pressed={favoriteIds.has(asset.id)} onClick={(event) => { event.stopPropagation(); toggleFavorite(asset.id); }} title={favoriteIds.has(asset.id) ? "Quitar de favoritas" : "Agregar a favoritas"} aria-label={favoriteIds.has(asset.id) ? "Quitar de favoritas" : "Agregar a favoritas"}><Heart size={15} fill={favoriteIds.has(asset.id) ? "currentColor" : "none"} /></button>
                 </div>
@@ -708,39 +712,23 @@ export default function App() {
             </div>}
           </footer>
         </aside>
-        <section className="bottom-files">
-          <header>
-            <div className="bottom-tabs">
-              <button className={bottomTab === "files" ? "active" : ""} aria-pressed={bottomTab === "files"} onClick={() => setBottomTab("files")}><FolderOpen size={15} /> Archivos</button>
-              <button className={bottomTab === "metadata" ? "active" : ""} aria-pressed={bottomTab === "metadata"} onClick={() => setBottomTab("metadata")}><Sparkles size={15} /> Metadatos</button>
-              <span>{bottomTab === "files" ? folderContents?.relativePath || rootLabel : selected?.fileName || "Elegí una animación"}</span>
-            </div>
-            {bottomTab === "files" && <button onClick={() => folderContents?.path && openFolder(folderContents.path)} disabled={!folderContents?.path} title="Abrir carpeta en Windows"><FolderOpen size={17} /></button>}
-          </header>
-          {bottomTab === "files" ? (
-            <div className="file-table">
-              <div className="file-row table-head"><span>Nombre</span><span>Tipo</span><span>Tamaño</span><span>Modificado</span><span /></div>
-              {(folderContents?.entries ?? []).map((entry) => <div className="file-row" key={entry.path} onDoubleClick={() => entry.kind === "folder" ? navigateFolder(entry.path) : entry.kind === "animation" && setSelected(library.animations.find((asset) => asset.path === entry.path) ?? null)}>
-                <span>{entry.kind === "folder" ? <Folder size={15} /> : <Box size={15} />}<strong>{entry.name}</strong></span>
-                <span>{entry.kind === "folder" ? "Carpeta" : entry.extension.replace(".", "").toUpperCase() || "Archivo"}</span>
-                <span>{entry.kind === "folder" ? "—" : formatBytes(entry.size)}</span>
-                <span>{entry.modified ? new Date(entry.modified * 1000).toLocaleDateString("es-AR") : "—"}</span>
-                <button onClick={() => entry.kind === "folder" ? openFolder(entry.path) : revealFile(entry.path)} title="Mostrar en Windows"><FolderOpen size={14} /></button>
-              </div>)}
-              {!folderContents?.entries.length && <div className="files-empty">Esta carpeta está vacía.</div>}
-            </div>
-          ) : selected ? (
-            <form className="metadata-editor" onSubmit={(event) => { event.preventDefault(); void saveCurrentMetadata(); }}>
-              <label>Nombre para juego<input value={metadataDraft.gameName} maxLength={120} placeholder={selected.name} onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, gameName: event.target.value })); }} /></label>
-              <label>Categoría<select value={metadataDraft.categoryId} onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, categoryId: event.target.value })); }}><option value="">Sin clasificar</option>{catalogData.categories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>
-              <label>Subcategoría<input value={metadataDraft.subcategory} maxLength={80} placeholder="Ej.: Escudo" onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, subcategory: event.target.value })); }} /></label>
-              <label>Etiquetas<input value={metadataDraft.tags} maxLength={400} placeholder="hit, combate, escudo" onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, tags: event.target.value })); }} /></label>
-              <label className="metadata-description">Descripción<textarea value={metadataDraft.description} maxLength={2000} placeholder="Describí qué hace esta animación" onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, description: event.target.value })); }} /></label>
-              <div className="metadata-actions"><button className="metadata-save" type="submit" disabled={metadataSaving}><Save size={15} /> {metadataSaving ? "Guardando…" : "Guardar metadatos"}</button>{metadataSaved && <span>Guardado</span>}</div>
-            </form>
-          ) : <div className="files-empty">Elegí una animación para editar sus metadatos.</div>}
-        </section>
       </section>
+      {metadataOpen && selected && <div className="modal-backdrop" role="presentation" onMouseDown={() => setMetadataOpen(false)}>
+        <section className="metadata-modal" role="dialog" aria-modal="true" aria-label="Metadatos de la animación" onMouseDown={(event) => event.stopPropagation()}>
+          <header>
+            <div><strong>Metadatos</strong><span title={selected.fileName}>{selected.fileName}</span></div>
+            <button className="icon-button" onClick={() => setMetadataOpen(false)} title="Cerrar" aria-label="Cerrar metadatos"><X size={18} /></button>
+          </header>
+          <form className="metadata-editor" onSubmit={(event) => { event.preventDefault(); void saveCurrentMetadata(); }}>
+            <label>Nombre para juego<input autoFocus value={metadataDraft.gameName} maxLength={120} placeholder={selected.name} onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, gameName: event.target.value })); }} /></label>
+            <label>Categoría<select value={metadataDraft.categoryId} onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, categoryId: event.target.value })); }}><option value="">Sin clasificar</option>{catalogData.categories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>
+            <label>Subcategoría<input value={metadataDraft.subcategory} maxLength={80} placeholder="Ej.: Escudo" onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, subcategory: event.target.value })); }} /></label>
+            <label>Etiquetas<input value={metadataDraft.tags} maxLength={400} placeholder="hit, combate, escudo" onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, tags: event.target.value })); }} /></label>
+            <label className="metadata-description">Descripción<textarea value={metadataDraft.description} maxLength={2000} placeholder="Describí qué hace esta animación" onChange={(event) => { setMetadataSaved(false); setMetadataDraft((current) => ({ ...current, description: event.target.value })); }} /></label>
+            <div className="metadata-actions"><button className="metadata-save" type="submit" disabled={metadataSaving}><Save size={15} /> {metadataSaving ? "Guardando…" : "Guardar metadatos"}</button>{metadataSaved && <span>Guardado</span>}</div>
+          </form>
+        </section>
+      </div>}
       {settingsOpen && <BrandSettings onClose={() => setSettingsOpen(false)} catalog={catalogData} onCatalogChange={setCatalogData} onError={setError} />}
     </main>
   );
