@@ -1,0 +1,29 @@
+{
+  "asset": { "version": "2.0", "generator": "Biblioteca 3D test fixture" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [{ "name": "Personaje de prueba", "mesh": 0 }],
+  "meshes": [{
+    "name": "Triángulo",
+    "primitives": [{ "attributes": { "POSITION": 0 } }]
+  }],
+  "buffers": [{
+    "byteLength": 68,
+    "uri": "data:application/octet-stream;base64,AAAAvwAAAAAAAAAAAAAAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAA="
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 8 },
+    { "buffer": 0, "byteOffset": 44, "byteLength": 24 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-0.5, 0, 0], "max": [0.5, 1, 0] },
+    { "bufferView": 1, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1] },
+    { "bufferView": 2, "componentType": 5126, "count": 2, "type": "VEC3" }
+  ],
+  "animations": [{
+    "name": "Subir",
+    "samplers": [{ "input": 1, "output": 2, "interpolation": "LINEAR" }],
+    "channels": [{ "sampler": 0, "target": { "node": 0, "path": "translation" } }]
+  }]
+}
