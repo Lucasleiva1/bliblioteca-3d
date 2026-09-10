@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Focus,
+  FolderOpen,
   Grid3X3,
   Pause,
   Play,
@@ -16,8 +17,10 @@ import {
   SkipBack,
   StepBack,
   StepForward,
+  Tag,
 } from "lucide-react";
 import { readAssetBytes } from "../lib/api";
+import { formatBytes, formatDate, parentFolderName } from "../lib/format";
 import type { AnimationAsset } from "../lib/types";
 
 type PlaybackState = "empty" | "loading" | "ready" | "playing" | "paused" | "error";
@@ -337,6 +340,8 @@ export default function Viewer3D({
   onNext,
   canPrevious,
   canNext,
+  onReveal,
+  onEditMetadata,
 }: {
   asset: AnimationAsset | null;
   characterBody: "male" | "female";
@@ -346,6 +351,8 @@ export default function Viewer3D({
   onNext: () => void;
   canPrevious: boolean;
   canNext: boolean;
+  onReveal: () => void;
+  onEditMetadata: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<ViewerRuntime | null>(null);
@@ -474,6 +481,20 @@ export default function Viewer3D({
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.target.set(0, 1, 0);
+    controls.enableRotate = true;
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.zoomSpeed = 0.9;
+    controls.panSpeed = 0.9;
+    controls.rotateSpeed = 0.9;
+    controls.minDistance = 0.25;
+    controls.maxDistance = 60;
+    controls.screenSpacePanning = true;
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.ROTATE,
+      RIGHT: THREE.MOUSE.PAN,
+    };
     const hemi = new THREE.HemisphereLight(0xffffff, 0x262a30, 2.2);
     const key = new THREE.DirectionalLight(0xffe7ca, 2.7);
     key.position.set(4, 7, 5);
@@ -687,6 +708,19 @@ export default function Viewer3D({
         {state === "loading" && <div className="viewer-message"><span className="loader" /><strong>Cargando {asset?.fileName}</strong></div>}
         {state === "error" && <div className="viewer-message error"><strong>No se pudo abrir esta animación</strong><span>{error}</span></div>}
         {state === "ready" && clips.length === 0 && <div className="viewer-message compact"><strong>El archivo no contiene clips de animación</strong></div>}
+      </div>
+      <div className="file-strip">
+        {asset ? (
+          <>
+            <span className={`file-format format-${asset.format}`}>{asset.format.toUpperCase()}</span>
+            <div className="file-strip-meta">
+              <strong title={asset.path}>{asset.fileName}</strong>
+              <span>{[formatBytes(asset.size), formatDate(asset.modified), parentFolderName(asset.relativePath)].filter(Boolean).join("  ·  ")}</span>
+            </div>
+            <button onClick={onReveal} title="Abrir la carpeta y marcar este archivo" aria-label="Abrir la carpeta y marcar este archivo"><FolderOpen size={16} /></button>
+            <button onClick={onEditMetadata} title="Editar metadatos" aria-label="Editar metadatos"><Tag size={16} /></button>
+          </>
+        ) : <span className="file-strip-empty">Sin animación seleccionada</span>}
       </div>
       <div className="transport">
         <button onClick={stopPlayback} disabled={!clips.length} title="Detener y volver al inicio"><SkipBack size={17} /></button>

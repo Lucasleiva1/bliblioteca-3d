@@ -34,49 +34,19 @@ import {
 } from "lucide-react";
 import Viewer3D from "../engine/Viewer3D";
 import { createDatabaseBackup, deleteCategory, exportCatalog, getCatalogData, getDiagnostics, getInitialState, isDesktopRuntime, listFolder, openFolder, reorderCategories, restoreDatabaseBackup, revealFile, saveAnimationMetadata, saveCategory, scanLibrary } from "../lib/api";
+import { formatBytes } from "../lib/format";
 import type { AnimationAsset, AnimationMetadata, CatalogData, FolderContents, FolderNode, LibrarySnapshot } from "../lib/types";
 import { thumbnailForAnimation } from "../lib/thumbnails";
 
 const EMPTY_LIBRARY: LibrarySnapshot = { rootPath: "", folders: [], animations: [], scannedAt: 0 };
 const EMPTY_CATALOG: CatalogData = { categories: [], metadata: [] };
 const CATALOG_PAGE_SIZE = 24;
+const LEFT_MIN = 150;
+const LEFT_MAX = 420;
+const LEFT_DEFAULT = 224;
 const emptyMetadata = (assetId = ""): AnimationMetadata => ({ assetId, gameName: "", categoryId: "", subcategory: "", tags: "", description: "" });
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unit = units[0];
-  for (let index = 1; index < units.length && value >= 1024; index += 1) {
-    value /= 1024;
-    unit = units[index];
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
-}
 
-function FolderBranch({ node, currentPath, onOpen }: { node: FolderNode; currentPath: string; onOpen: (path: string) => void }) {
-  const [expanded, setExpanded] = useState(true);
-  const active = node.path.localeCompare(currentPath, undefined, { sensitivity: "accent" }) === 0;
-  return (
-    <div className="folder-branch">
-      <div className={active ? "folder-row active" : "folder-row"}>
-        <button className="tree-chevron" onClick={() => setExpanded((value) => !value)} disabled={!node.children.length} aria-label={expanded ? "Plegar carpeta" : "Desplegar carpeta"}>
-          {node.children.length ? (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
-        </button>
-        <button className="folder-name" onClick={() => onOpen(node.path)} onDoubleClick={() => setExpanded(true)} title={node.path}>
-          {active ? <FolderOpen size={16} /> : <Folder size={16} />}
-          <span>{node.name}</span>
-          <small>{node.animationCount}</small>
-        </button>
-      </div>
-      {expanded && node.children.length > 0 && (
-        <div className="folder-children">
-          {node.children.map((child) => <FolderBranch key={child.path} node={child} currentPath={currentPath} onOpen={onOpen} />)}
-        </div>
-      )}
-    </div>
-  );
-}
 
 
 function CategoryEditor({ catalog, onChange, onError }: { catalog: CatalogData; onChange: (value: CatalogData) => void; onError: (message: string) => void }) {
@@ -272,7 +242,7 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [formatFilter, setFormatFilter] = useState<"all" | "fbx" | "glb" | "gltf">("all");
   const [sortOrder, setSortOrder] = useState<"name" | "modified" | "size">("name");
-  const [catalogMode, setCatalogMode] = useState<string>("folder");
+  const [catalogMode, setCatalogMode] = useState<string>("all");
   const [catalogPage, setCatalogPage] = useState(0);
   const [draggedAssetId, setDraggedAssetId] = useState<string | null>(null);
   const [categoryDropId, setCategoryDropId] = useState<string | null>(null);
@@ -290,6 +260,11 @@ export default function App() {
   const [folderHistory, setFolderHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(() => {
+    const saved = Number(localStorage.getItem("biblioteca-3d-left-width"));
+    return Number.isFinite(saved) && saved >= LEFT_MIN && saved <= LEFT_MAX ? Math.round(saved) : LEFT_DEFAULT;
+  });
+  const [leftCollapsed, setLeftCollapsed] = useState(() => localStorage.getItem("biblioteca-3d-left-collapsed") === "true");
   const [brandRevision, setBrandRevision] = useState(0);
   const [characterBones, setCharacterBones] = useState(() => localStorage.getItem("biblioteca-3d-character-bones") !== "false");
   const [characterBody, setCharacterBody] = useState<"male" | "female">(() => localStorage.getItem("biblioteca-3d-character-body") === "female" ? "female" : "male");
@@ -308,7 +283,7 @@ export default function App() {
         return;
       }
       const target = event.target as HTMLElement | null;
-      if (!target?.closest(".library-current, .library-strip")) setFolderPanelOpen(false);
+      if (!target?.closest(".library-current-wrap")) setFolderPanelOpen(false);
       if (!target?.closest(".catalog-filter-menu")) setCatalogOptionsOpen(false);
     };
     window.addEventListener("pointerdown", closeMenus);
@@ -391,7 +366,13 @@ export default function App() {
       try {
         const snapshot = await scanLibrary(library.rootPath);
         setLibrary(snapshot);
-        setSelected((current) => snapshot.animations.find((asset) => asset.id === current?.id) ?? snapshot.animations[0] ?? null);
+        setSelected((current) => {
+          if (!current) return snapshot.animations[0] ?? null;
+          const match = snapshot.animations.find((asset) => asset.id === current.id);
+          if (!match) return snapshot.animations[0] ?? null;
+          const unchanged = match.path === current.path && match.size === current.size && match.modified === current.modified;
+          return unchanged ? current : match;
+        });
         if (folderContents?.path) await loadFolder(folderContents.path);
       } catch {
         // El escaneo manual muestra el detalle; el sondeo silencioso no interrumpe al usuario.
@@ -617,6 +598,34 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   });
 
+  useEffect(() => {
+    localStorage.setItem("biblioteca-3d-left-width", String(leftWidth));
+  }, [leftWidth]);
+
+  useEffect(() => {
+    localStorage.setItem("biblioteca-3d-left-collapsed", String(leftCollapsed));
+  }, [leftCollapsed]);
+
+  const startLeftResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = leftCollapsed ? 0 : leftWidth;
+    const onMove = (move: PointerEvent) => {
+      const next = startWidth + (move.clientX - startX);
+      if (next >= LEFT_MIN) setLeftCollapsed(false);
+      setLeftWidth(Math.round(Math.min(LEFT_MAX, Math.max(LEFT_MIN, next))));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.classList.remove("resizing");
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    document.body.classList.add("resizing");
+  };
+
   const rootLabel = library.rootPath.split(/[\\/]/).filter(Boolean).at(-1) || "Sin biblioteca";
   void brandRevision;
   return (
@@ -627,31 +636,19 @@ export default function App() {
           <button className="primary" onClick={chooseLibrary}><FolderOpen size={17} /><span>{library.rootPath ? "Cambiar biblioteca" : "Elegir biblioteca"}</span></button>
           <button onClick={rescan} disabled={!library.rootPath || scanning} title="Rescanear biblioteca"><RefreshCw className={scanning ? "spin" : ""} size={17} /><span>Rescanear</span></button>
         </div>
-        <button className={folderPanelOpen ? "library-current active" : "library-current"} title={library.rootPath || "Sin biblioteca"} onClick={() => setFolderPanelOpen((value) => !value)} disabled={!library.rootPath}><FolderOpen size={16} /><span><small>BIBLIOTECA ACTUAL</small><strong>{rootLabel}</strong></span><ChevronDown className={folderPanelOpen ? "open" : ""} size={14} /></button>
+        <div className="library-current-wrap">
+          <button className={folderPanelOpen ? "library-current active" : "library-current"} title={library.rootPath || "Sin biblioteca"} onClick={() => setFolderPanelOpen((value) => !value)} disabled={!library.rootPath} aria-expanded={folderPanelOpen}><FolderOpen size={16} /><span><small>BIBLIOTECA ACTUAL</small><strong>{rootLabel}</strong></span><ChevronDown className={folderPanelOpen ? "open" : ""} size={14} /></button>
+          {folderPanelOpen && library.rootPath && (
+            <div className="library-popover" role="dialog" aria-label="Ubicación de la biblioteca">
+              <small>UBICACIÓN</small>
+              <p title={library.rootPath}>{library.rootPath}</p>
+            </div>
+          )}
+        </div>
         <button className="icon-button" onClick={() => setSettingsOpen(true)} title="Ajustes"><Settings size={18} /></button>
       </header>
       {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError(null)} title="Cerrar"><X size={16} /></button></div>}
-      {folderPanelOpen && library.rootPath && (
-        <section className="library-strip" aria-label="Carpetas de la biblioteca">
-          <div className="panel-heading">
-            <span>BIBLIOTECA</span>
-            <em className="strip-path" title={folderContents?.path || library.rootPath}>{folderContents?.relativePath ? folderContents.relativePath.replaceAll("\\", "  /  ") : "raíz"}</em>
-            <div className="panel-heading-actions">
-              <button onClick={goBack} disabled={historyIndex <= 0} title="Volver a la carpeta anterior" aria-label="Volver a la carpeta anterior"><ArrowLeft size={14} /></button>
-              <button onClick={goUp} disabled={!folderContents?.relativePath} title="Subir una carpeta" aria-label="Subir una carpeta"><ArrowUp size={14} /></button>
-              <button onClick={() => folderContents?.path && openFolder(folderContents.path)} disabled={!folderContents?.path} title="Abrir esta carpeta en Windows" aria-label="Abrir esta carpeta en Windows"><FolderOpen size={14} /></button>
-              <small>{library.folders.length} carpetas</small>
-            </div>
-          </div>
-          <button className={folderContents?.path === library.rootPath && catalogMode === "folder" ? "root-folder active" : "root-folder"} onClick={() => navigateFolder(library.rootPath)}>
-            <FolderOpen size={17} /><span>{rootLabel}</span><small>{library.animations.length}</small>
-          </button>
-          <div className="folder-tree">
-            {library.folders.map((node) => <FolderBranch key={node.path} node={node} currentPath={catalogMode === "folder" ? folderContents?.path || library.rootPath : ""} onOpen={navigateFolder} />)}
-          </div>
-        </section>
-      )}
-      <section className="workspace">
+      <section className={leftCollapsed ? "workspace left-collapsed" : "workspace"} style={{ "--left-w": leftCollapsed ? "0px" : `${leftWidth}px` } as React.CSSProperties}>
         <aside className="left-panel">
           <div className="panel-heading"><span>CATEGORÍAS</span><div className="panel-heading-actions"><small>{catalogData.categories.length}</small><button onClick={() => setSettingsOpen(true)} title="Administrar categorías"><Settings size={14} /></button></div></div>
           <div className="smart-views category-navigation">
@@ -668,8 +665,13 @@ export default function App() {
           </div>
           <div className="category-status"><span>{visibleAnimations.length} visibles</span></div>
         </aside>
+        <div className="panel-resizer" onPointerDown={startLeftResize} role="separator" aria-orientation="vertical" aria-label="Ajustar el ancho de la columna de categorías">
+          <button className="resizer-toggle" onPointerDown={(event) => event.stopPropagation()} onClick={() => setLeftCollapsed((value) => !value)} title={leftCollapsed ? "Mostrar categorías" : "Ocultar categorías"} aria-label={leftCollapsed ? "Mostrar categorías" : "Ocultar categorías"} aria-expanded={!leftCollapsed}>
+            {leftCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
+          </button>
+        </div>
         <section className="center-column">
-          <Viewer3D asset={selected} characterBody={characterBody} characterBones={characterBones} autoplay={autoplay} onPrevious={() => selectRelative(-1)} onNext={() => selectRelative(1)} canPrevious={selectedIndex > 0} canNext={selectedIndex >= 0 && selectedIndex < visibleAnimations.length - 1} />
+          <Viewer3D asset={selected} characterBody={characterBody} characterBones={characterBones} autoplay={autoplay} onPrevious={() => selectRelative(-1)} onNext={() => selectRelative(1)} canPrevious={selectedIndex > 0} canNext={selectedIndex >= 0 && selectedIndex < visibleAnimations.length - 1} onReveal={() => selected && void revealAnimation(selected)} onEditMetadata={() => { if (!selected) return; setMetadataSaved(false); setMetadataOpen(true); }} />
         </section>
         <aside className="right-panel">
           <div className="catalog-tools">
@@ -695,8 +697,6 @@ export default function App() {
                 <div className={`animation-thumb format-${asset.format}`}><img src={thumbnailForAnimation(asset.fileName)} alt={`Boceto de ${asset.name}`} loading="lazy" /><span>{asset.format.toUpperCase()}</span></div>
                 <div className="animation-meta"><strong title={asset.fileName}>{metadataById.get(asset.id)?.gameName || asset.name}</strong><span>{metadataById.get(asset.id)?.gameName ? `${asset.name} · ` : ""}{formatBytes(asset.size)} · {asset.format.toUpperCase()}</span></div>
                 <div className="animation-actions">
-                  <button draggable={false} onClick={(event) => { event.stopPropagation(); setSelected(asset); setMetadataSaved(false); setMetadataOpen(true); }} title="Editar metadatos" aria-label={`Editar metadatos de ${asset.name}`}><Sparkles size={15} /></button>
-                  <button draggable={false} onClick={(event) => { event.stopPropagation(); void revealAnimation(asset); }} title="Abrir carpeta y seleccionar este archivo" aria-label={`Abrir carpeta y seleccionar ${asset.fileName}`}><FolderOpen size={15} /></button>
                   <button draggable={false} className={favoriteIds.has(asset.id) ? "favorite active" : "favorite"} aria-pressed={favoriteIds.has(asset.id)} onClick={(event) => { event.stopPropagation(); toggleFavorite(asset.id); }} title={favoriteIds.has(asset.id) ? "Quitar de favoritas" : "Agregar a favoritas"} aria-label={favoriteIds.has(asset.id) ? "Quitar de favoritas" : "Agregar a favoritas"}><Heart size={15} fill={favoriteIds.has(asset.id) ? "currentColor" : "none"} /></button>
                 </div>
               </article>

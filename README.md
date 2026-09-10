@@ -41,7 +41,7 @@ cargo test
 - Producto: `Biblioteca 3D`
 - Paquete: `biblioteca-3d`
 - Identificador: `com.biblioteca3d.desktop`
-- Versión actual: `0.1.5`
+- Versión actual: `0.1.6`
 - Puerto de desarrollo: `1430`
 
 El repositorio de destino es `https://github.com/Lucasleiva1/bliblioteca-3d.git`. No se reutiliza la identidad ni los datos de ROXWANA. `tests/fixtures/animated-triangle.gltf` es un modelo mínimo generado para comprobar el cargador y no forma parte de la biblioteca del usuario.
@@ -50,4 +50,4 @@ El repositorio de destino es `https://github.com/Lucasleiva1/bliblioteca-3d.git`
 
 La raíz elegida se guarda en SQLite dentro de los datos locales de la aplicación. El escaneo no sigue enlaces y excluye cualquier carpeta `_biblioteca-3d`. Las lecturas de modelos y recursos asociados se validan para impedir rutas fuera de la biblioteca activa. Favoritas, tema y marca se guardan localmente en el perfil de la aplicación.
 
-El plan completo está en el Escritorio como `Plan-Biblioteca-Animaciones-3D-v1.0.0.md`. El estado de las ocho etapas está en `docs/Progreso-Biblioteca-3D-v0.1.2.md`, el uso diario en `docs/Manual-Biblioteca-3D-v0.1.2.md` y el cambio más reciente en `docs/Cambios-Biblioteca-3D-v0.1.5.md`.
+El plan completo está en el Escritorio como `Plan-Biblioteca-Animaciones-3D-v1.0.0.md`. El estado de las ocho etapas está en `docs/Progreso-Biblioteca-3D-v0.1.2.md`, el uso diario en `docs/Manual-Biblioteca-3D-v0.1.2.md` y el cambio más reciente en `docs/Cambios-Biblioteca-3D-v0.1.6.md`.
