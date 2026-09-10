@@ -72,3 +72,19 @@ export interface CatalogData {
   categories: Category[];
   metadata: AnimationMetadata[];
 }
+
+export interface FileMutation {
+  oldId: string;
+  newId: string;
+  newPath: string;
+}
+
+export interface Diagnostics {
+  version: string;
+  databasePath: string;
+  libraryRoot: string;
+  libraryAvailable: boolean;
+  animations: number;
+  categories: number;
+  metadata: number;
+}

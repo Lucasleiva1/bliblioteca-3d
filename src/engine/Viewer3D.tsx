@@ -5,6 +5,8 @@ import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   Box,
+  ChevronLeft,
+  ChevronRight,
   Focus,
   Grid3X3,
   Pause,
@@ -12,6 +14,8 @@ import {
   RotateCcw,
   ScanLine,
   SkipBack,
+  StepBack,
+  StepForward,
 } from "lucide-react";
 import { readAssetBytes } from "../lib/api";
 import type { AnimationAsset } from "../lib/types";
@@ -324,7 +328,25 @@ function formatTime(value: number) {
   return `${minutes}:${seconds.toFixed(2).padStart(5, "0")}`;
 }
 
-export default function Viewer3D({ asset, characterBody, characterBones }: { asset: AnimationAsset | null; characterBody: "male" | "female"; characterBones: boolean }) {
+export default function Viewer3D({
+  asset,
+  characterBody,
+  characterBones,
+  autoplay,
+  onPrevious,
+  onNext,
+  canPrevious,
+  canNext,
+}: {
+  asset: AnimationAsset | null;
+  characterBody: "male" | "female";
+  characterBones: boolean;
+  autoplay: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  canPrevious: boolean;
+  canNext: boolean;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<ViewerRuntime | null>(null);
   const loadGeneration = useRef(0);
@@ -389,6 +411,22 @@ export default function Viewer3D({ asset, characterBody, characterBones }: { ass
     action.reset().play();
     action.paused = true;
     setTime(0);
+    setState("paused");
+  }, []);
+
+  const stepFrame = useCallback((direction: -1 | 1) => {
+    const runtime = runtimeRef.current;
+    const clip = runtime?.clips[runtime.activeClip];
+    if (!runtime?.mixer || !clip) return;
+    const action = runtime.mixer.clipAction(clip);
+    if (!action.isRunning()) action.play();
+    action.paused = true;
+    const next = THREE.MathUtils.clamp(runtime.mixer.time + direction / 30, 0, clip.duration);
+    const previousScale = runtime.mixer.timeScale;
+    runtime.mixer.timeScale = 1;
+    runtime.mixer.setTime(next);
+    runtime.mixer.timeScale = previousScale;
+    setTime(next);
     setState("paused");
   }, []);
 
@@ -610,7 +648,8 @@ export default function Viewer3D({ asset, characterBody, characterBones }: { ass
         action.setLoop(loopRef.current ? THREE.LoopRepeat : THREE.LoopOnce, loopRef.current ? Infinity : 1);
         action.clampWhenFinished = !loopRef.current;
         action.play();
-        setState("playing");
+        action.paused = !autoplay;
+        setState(autoplay ? "playing" : "paused");
       } else {
         setState("ready");
       }
@@ -620,7 +659,7 @@ export default function Viewer3D({ asset, characterBody, characterBones }: { ass
       setError(String(loadError));
       setState("error");
     });
-  }, [asset, characterBody, frameObject]);
+  }, [asset, autoplay, characterBody, frameObject]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -634,10 +673,12 @@ export default function Viewer3D({ asset, characterBody, characterBones }: { ass
   return (
     <section className="viewer-panel" aria-label="Visor 3D">
       <div className="viewer-toolbar">
-        <button className={showMesh ? "active" : ""} aria-pressed={showMesh} onClick={() => setShowMesh((value) => !value)} title="Mostrar u ocultar personaje o maniquí translúcido"><Box size={16} /> Personaje</button>
-        <button className={showSkeleton ? "active" : ""} aria-pressed={showSkeleton} onClick={() => setSkeletonPreference(!showSkeleton)} title="Mostrar u ocultar esqueleto"><ScanLine size={16} /> Esqueleto</button>
-        <button className={showGrid ? "active" : ""} aria-pressed={showGrid} onClick={() => setShowGrid((value) => !value)} title="Mostrar u ocultar cuadrícula"><Grid3X3 size={16} /> Grid</button>
+        <button className={showMesh ? "active" : ""} aria-pressed={showMesh} onClick={() => setShowMesh((value) => !value)} title="Mostrar u ocultar personaje o maniquí translúcido"><Box size={16} /><span>Personaje</span></button>
+        <button className={showSkeleton ? "active" : ""} aria-pressed={showSkeleton} onClick={() => setSkeletonPreference(!showSkeleton)} title="Mostrar u ocultar esqueleto"><ScanLine size={16} /><span>Esqueleto</span></button>
+        <button className={showGrid ? "active" : ""} aria-pressed={showGrid} onClick={() => setShowGrid((value) => !value)} title="Mostrar u ocultar cuadrícula"><Grid3X3 size={16} /><span>Grid</span></button>
         <span className="toolbar-spacer" />
+        <button onClick={onPrevious} disabled={!canPrevious} title="Animacion anterior"><ChevronLeft size={16} /></button>
+        <button onClick={onNext} disabled={!canNext} title="Animacion siguiente"><ChevronRight size={16} /></button>
         <button onClick={frameObject} disabled={!asset} title="Centrar y encuadrar"><Focus size={16} /></button>
         <button onClick={frameObject} disabled={!asset} title="Restablecer cámara"><RotateCcw size={16} /></button>
       </div>
@@ -649,9 +690,11 @@ export default function Viewer3D({ asset, characterBody, characterBones }: { ass
       </div>
       <div className="transport">
         <button onClick={stopPlayback} disabled={!clips.length} title="Detener y volver al inicio"><SkipBack size={17} /></button>
+        <button onClick={() => stepFrame(-1)} disabled={!clips.length} title="Retroceder un cuadro"><StepBack size={17} /></button>
         <button className="transport-main" onClick={playPause} disabled={!clips.length} title={state === "playing" ? "Pausar" : "Reproducir"}>
           {state === "playing" ? <Pause size={18} /> : <Play size={18} />}
         </button>
+        <button onClick={() => stepFrame(1)} disabled={!clips.length} title="Avanzar un cuadro"><StepForward size={17} /></button>
         <select value={clipIndex} onChange={(event) => chooseClip(Number(event.target.value))} disabled={!clips.length} aria-label="Clip de animación">
           {clips.length ? clips.map((clip, index) => <option key={`${clip.name}-${index}`} value={index}>{clip.name || `Clip ${index + 1}`}</option>) : <option>Sin clips</option>}
         </select>

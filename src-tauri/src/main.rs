@@ -1,19 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{backup::Backup, params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use walkdir::{DirEntry, WalkDir};
 
 const TECHNICAL_DIR: &str = "_biblioteca-3d";
+const DEFAULT_LIBRARY_ROOT: &str = r"D:\biblioteca-3d";
 const ANIMATION_EXTENSIONS: &[&str] = &["fbx", "glb", "gltf"];
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -86,7 +87,7 @@ struct AssetResource {
     mime_type: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Category {
     id: String,
@@ -110,6 +111,26 @@ struct AnimationMetadata {
 struct CatalogData {
     categories: Vec<Category>,
     metadata: Vec<AnimationMetadata>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileMutation {
+    old_id: String,
+    new_id: String,
+    new_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Diagnostics {
+    version: String,
+    database_path: String,
+    library_root: String,
+    library_available: bool,
+    animations: usize,
+    categories: usize,
+    metadata: usize,
 }
 
 fn now() -> i64 {
@@ -284,24 +305,42 @@ fn open_database(app: &AppHandle) -> Result<Connection, String> {
                description TEXT NOT NULL DEFAULT '',
                updated_at INTEGER NOT NULL
              );
-             INSERT OR IGNORE INTO categories(id, name, sort_order) VALUES
-               ('idle', 'Idle', 10),
-               ('walk', 'Walk', 20),
-               ('run', 'Run', 30),
-               ('movement', 'Movimiento', 40),
-               ('jump', 'Salto', 50),
-               ('dodge-roll', 'Esquive / Rodar', 60),
-               ('attack', 'Ataque', 70),
-               ('heavy-attack', 'Ataque fuerte', 80),
-               ('block', 'Bloqueo', 90),
-               ('parry', 'Parada', 100),
-               ('hit-reaction', 'Reacción a golpe', 110),
-               ('death', 'Muerte', 120),
-               ('turn', 'Giro', 130),
-               ('combat', 'Combate', 140),
-               ('special', 'Especiales', 150);",
+",
         )
         .map_err(|error| error.to_string())?;
+    let categories_seeded = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'categories_seeded'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .is_some();
+    if !categories_seeded {
+        connection
+            .execute_batch(
+                "INSERT OR IGNORE INTO categories(id, name, sort_order) VALUES
+                   ('idle', 'Idle', 10),
+                   ('walk', 'Walk', 20),
+                   ('run', 'Run', 30),
+                   ('movement', 'Movimiento', 40),
+                   ('jump', 'Salto', 50),
+                   ('dodge-roll', 'Esquive / Rodar', 60),
+                   ('attack', 'Ataque', 70),
+                   ('heavy-attack', 'Ataque fuerte', 80),
+                   ('block', 'Bloqueo', 90),
+                   ('parry', 'Parada', 100),
+                   ('hit-reaction', 'Reaccion a golpe', 110),
+                   ('death', 'Muerte', 120),
+                   ('turn', 'Giro', 130),
+                   ('combat', 'Combate', 140),
+                   ('special', 'Especiales', 150);
+                 INSERT INTO settings(key, value) VALUES('categories_seeded', '1')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+            )
+            .map_err(|error| error.to_string())?;
+    }
     Ok(connection)
 }
 
@@ -378,6 +417,130 @@ fn clean_field(value: String, maximum: usize, label: &str) -> Result<String, Str
         return Err(format!("{label} supera el máximo de {maximum} caracteres"));
     }
     Ok(value)
+}
+
+#[tauri::command]
+fn save_category(app: AppHandle, category_id: String, name: String) -> Result<CatalogData, String> {
+    let name = clean_field(name, 60, "El nombre de la categoria")?;
+    if name.is_empty() {
+        return Err("La categoria necesita un nombre".to_string());
+    }
+    let category_id = clean_field(category_id, 80, "El identificador de categoria")?;
+    let connection = open_database(&app)?;
+    if category_id.is_empty() {
+        let mut hash = Sha256::new();
+        hash.update(format!("{}:{}", name.to_lowercase(), now()).as_bytes());
+        let id = format!("custom-{:x}", hash.finalize())
+            .chars()
+            .take(24)
+            .collect::<String>();
+        let next_order = connection
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), 0) + 10 FROM categories",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO categories(id, name, sort_order) VALUES(?1, ?2, ?3)",
+                params![id, name, next_order],
+            )
+            .map_err(|error| format!("No se pudo crear la categoria: {error}"))?;
+    } else {
+        let changed = connection
+            .execute(
+                "UPDATE categories SET name = ?2 WHERE id = ?1",
+                params![category_id, name],
+            )
+            .map_err(|error| format!("No se pudo renombrar la categoria: {error}"))?;
+        if changed == 0 {
+            return Err("La categoria ya no existe".to_string());
+        }
+    }
+    catalog_data(&app)
+}
+
+#[tauri::command]
+fn delete_category(app: AppHandle, category_id: String) -> Result<CatalogData, String> {
+    let category_id = clean_field(category_id, 80, "El identificador de categoria")?;
+    if category_id.is_empty() {
+        return Err("La categoria no es valida".to_string());
+    }
+    let mut connection = open_database(&app)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE animation_metadata SET category_id = '' WHERE category_id = ?1",
+            params![&category_id],
+        )
+        .map_err(|error| error.to_string())?;
+    let changed = transaction
+        .execute(
+            "DELETE FROM categories WHERE id = ?1",
+            params![&category_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("La categoria ya no existe".to_string());
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    catalog_data(&app)
+}
+
+#[tauri::command]
+fn reorder_categories(app: AppHandle, category_ids: Vec<String>) -> Result<CatalogData, String> {
+    let mut connection = open_database(&app)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    for (index, category_id) in category_ids.iter().enumerate() {
+        transaction
+            .execute(
+                "UPDATE categories SET sort_order = ?2 WHERE id = ?1",
+                params![category_id, (index as i64 + 1) * 10],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    catalog_data(&app)
+}
+
+fn validate_entry_name(value: String) -> Result<String, String> {
+    let value = clean_field(value, 180, "El nombre")?;
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains(':')
+        || value.contains('*')
+        || value.contains('?')
+        || value.contains('"')
+        || value.contains('<')
+        || value.contains('>')
+        || value.contains('|')
+    {
+        return Err("El nombre contiene caracteres no permitidos por Windows".to_string());
+    }
+    Ok(value)
+}
+
+fn migrate_metadata_id(app: &AppHandle, old_id: &str, new_id: &str) -> Result<(), String> {
+    if old_id == new_id {
+        return Ok(());
+    }
+    open_database(app)?
+        .execute(
+            "UPDATE OR REPLACE animation_metadata SET asset_id = ?2 WHERE asset_id = ?1",
+            params![old_id, new_id],
+        )
+        .map_err(|error| {
+            format!("El archivo cambio, pero no se pudo migrar su metadata: {error}")
+        })?;
+    Ok(())
 }
 
 fn validate_root(path: &Path) -> Result<PathBuf, String> {
@@ -459,7 +622,7 @@ fn collect_assets(root: &Path) -> Vec<AnimationAsset> {
             modified: modified_time(&metadata),
         });
     }
-    animations.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    animations.sort_by_key(|animation| animation.name.to_lowercase());
     animations
 }
 
@@ -488,7 +651,7 @@ fn build_folder_node(root: &Path, directory: &Path) -> Result<FolderNode, String
             direct_count += 1;
         }
     }
-    children.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    children.sort_by_key(|child| child.name.to_lowercase());
     let animation_count = direct_count
         + children
             .iter()
@@ -523,7 +686,14 @@ fn build_snapshot(root: &Path) -> Result<LibrarySnapshot, String> {
 
 #[tauri::command]
 fn get_initial_state(app: AppHandle) -> Result<LibrarySnapshot, String> {
-    let root = saved_root(&app)?;
+    let saved = saved_root(&app)?;
+    let root = if saved.is_empty() && Path::new(DEFAULT_LIBRARY_ROOT).is_dir() {
+        let default_root = validate_root(Path::new(DEFAULT_LIBRARY_ROOT))?;
+        save_root(&app, &default_root)?;
+        path_string(&default_root)
+    } else {
+        saved
+    };
     if root.is_empty() || !Path::new(&root).is_dir() {
         return Ok(LibrarySnapshot {
             root_path: root,
@@ -594,6 +764,163 @@ fn save_animation_metadata(
         )
         .map_err(|error| format!("No se pudieron guardar los metadatos: {error}"))?;
     Ok(cleaned)
+}
+
+#[tauri::command]
+fn export_catalog(app: AppHandle) -> Result<String, String> {
+    let root_value = saved_root(&app)?;
+    let root = validate_root(Path::new(&root_value))?;
+    let snapshot = build_snapshot(&root)?;
+    let catalog = catalog_data(&app)?;
+    let metadata_by_id = catalog
+        .metadata
+        .iter()
+        .map(|item| (item.asset_id.as_str(), item))
+        .collect::<HashMap<_, _>>();
+    let animations = snapshot
+        .animations
+        .iter()
+        .map(|asset| {
+            let metadata = metadata_by_id.get(asset.id.as_str());
+            serde_json::json!({
+                "id": asset.id,
+                "fileName": asset.file_name,
+                "relativePath": asset.relative_path,
+                "format": asset.format,
+                "gameName": metadata.map(|item| item.game_name.as_str()).unwrap_or(""),
+                "categoryId": metadata.map(|item| item.category_id.as_str()).unwrap_or(""),
+                "subcategory": metadata.map(|item| item.subcategory.as_str()).unwrap_or(""),
+                "tags": metadata.map(|item| item.tags.as_str()).unwrap_or(""),
+                "description": metadata.map(|item| item.description.as_str()).unwrap_or("")
+            })
+        })
+        .collect::<Vec<_>>();
+    let document = serde_json::json!({
+        "schemaVersion": 1,
+        "applicationVersion": env!("CARGO_PKG_VERSION"),
+        "generatedAt": now(),
+        "root": path_string(&root),
+        "categories": catalog.categories,
+        "animations": animations
+    });
+    let technical = root.join(TECHNICAL_DIR);
+    fs::create_dir_all(&technical)
+        .map_err(|error| format!("No se pudo preparar la carpeta tecnica: {error}"))?;
+    let output = technical.join(format!("animations-v{}.json", env!("CARGO_PKG_VERSION")));
+    let bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|error| format!("No se pudo generar el JSON: {error}"))?;
+    fs::write(&output, bytes)
+        .map_err(|error| format!("No se pudo escribir el catalogo: {error}"))?;
+    Ok(path_string(&output))
+}
+
+#[tauri::command]
+fn create_database_backup(app: AppHandle) -> Result<String, String> {
+    let source = database_path(&app)?;
+    if !source.is_file() {
+        return Err("Todavia no existe una base de datos para respaldar".to_string());
+    }
+    let backup_directory = source
+        .parent()
+        .ok_or("La base de datos no tiene carpeta")?
+        .join("backups");
+    fs::create_dir_all(&backup_directory)
+        .map_err(|error| format!("No se pudo preparar la carpeta de respaldos: {error}"))?;
+    let target = backup_directory.join(format!(
+        "biblioteca-3d-backup-v{}-{}.sqlite",
+        env!("CARGO_PKG_VERSION"),
+        now()
+    ));
+    fs::copy(&source, &target).map_err(|error| format!("No se pudo crear el respaldo: {error}"))?;
+    Ok(path_string(&target))
+}
+
+#[tauri::command]
+fn get_diagnostics(app: AppHandle) -> Result<Diagnostics, String> {
+    let library_root = saved_root(&app)?;
+    let root = PathBuf::from(&library_root);
+    let library_available = root.is_dir();
+    let animations = if library_available {
+        build_snapshot(&validate_root(&root)?)?.animations.len()
+    } else {
+        0
+    };
+    let catalog = catalog_data(&app)?;
+    Ok(Diagnostics {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        database_path: path_string(&database_path(&app)?),
+        library_root,
+        library_available,
+        animations,
+        categories: catalog.categories.len(),
+        metadata: catalog.metadata.len(),
+    })
+}
+
+#[tauri::command]
+fn restore_database_backup(app: AppHandle, backup_path: String) -> Result<CatalogData, String> {
+    let backup_path = PathBuf::from(backup_path);
+    if !backup_path.is_file() {
+        return Err("El respaldo seleccionado no existe".to_string());
+    }
+    let extension = backup_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension != "sqlite" && extension != "db" {
+        return Err("El archivo seleccionado no es un respaldo SQLite".to_string());
+    }
+
+    let backup_path = backup_path
+        .canonicalize()
+        .map_err(|error| format!("No se pudo validar el respaldo: {error}"))?;
+    let active_path = database_path(&app)?;
+    if active_path
+        .canonicalize()
+        .ok()
+        .is_some_and(|path| path == backup_path)
+    {
+        return Err("Selecciona una copia distinta de la base activa".to_string());
+    }
+
+    let source = Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("No se pudo abrir el respaldo: {error}"))?;
+    let integrity = source
+        .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("No se pudo comprobar el respaldo: {error}"))?;
+    if integrity != "ok" {
+        return Err(format!("El respaldo esta danado: {integrity}"));
+    }
+    for table in ["settings", "categories", "animation_metadata"] {
+        let exists = source
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                params![table],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|error| format!("No se pudo comprobar la estructura: {error}"))?;
+        if !exists {
+            return Err(format!(
+                "El respaldo no contiene la tabla requerida: {table}"
+            ));
+        }
+    }
+
+    let safety_copy = create_database_backup(app.clone())?;
+    let mut destination = open_database(&app)?;
+    {
+        let backup = Backup::new(&source, &mut destination)
+            .map_err(|error| format!("No se pudo iniciar la restauracion: {error}"))?;
+        backup
+            .run_to_completion(8, Duration::from_millis(10), None)
+            .map_err(|error| format!("No se pudo restaurar la base: {error}"))?;
+    }
+    drop(destination);
+    open_database(&app)?;
+    let restored = catalog_data(&app)?;
+    eprintln!("Copia previa a la restauracion: {safety_copy}");
+    Ok(restored)
 }
 
 #[tauri::command]
@@ -676,6 +1003,107 @@ fn list_folder(app: AppHandle, path: String) -> Result<FolderContents, String> {
 }
 
 #[tauri::command]
+fn create_folder(
+    app: AppHandle,
+    parent_path: String,
+    name: String,
+) -> Result<FolderContents, String> {
+    let (_, parent) = resolve_inside_root(&app, Path::new(&parent_path))?;
+    if !parent.is_dir() {
+        return Err("La ubicacion elegida no es una carpeta".to_string());
+    }
+    let name = validate_entry_name(name)?;
+    let target = parent.join(name);
+    if target.exists() {
+        return Err("Ya existe un archivo o carpeta con ese nombre".to_string());
+    }
+    fs::create_dir(&target).map_err(|error| format!("No se pudo crear la carpeta: {error}"))?;
+    list_folder(app, parent_path)
+}
+
+#[tauri::command]
+fn rename_asset(app: AppHandle, path: String, new_name: String) -> Result<FileMutation, String> {
+    let (_, source) = resolve_inside_root(&app, Path::new(&path))?;
+    if !source.is_file() || !is_animation(&source) {
+        return Err("Solo se pueden renombrar animaciones desde esta accion".to_string());
+    }
+    let new_name = validate_entry_name(new_name)?;
+    let old_extension = extension(&source);
+    if extension(Path::new(&new_name)) != old_extension {
+        return Err(format!(
+            "El nombre debe conservar la extension .{old_extension}"
+        ));
+    }
+    let target = source
+        .parent()
+        .ok_or("El archivo no tiene carpeta")?
+        .join(new_name);
+    if target.exists() {
+        return Err("Ya existe una animacion con ese nombre".to_string());
+    }
+    let old_id = stable_id(&source);
+    fs::rename(&source, &target)
+        .map_err(|error| format!("No se pudo renombrar la animacion: {error}"))?;
+    let new_id = stable_id(&target);
+    migrate_metadata_id(&app, &old_id, &new_id)?;
+    Ok(FileMutation {
+        old_id,
+        new_id,
+        new_path: path_string(&target),
+    })
+}
+
+#[tauri::command]
+fn copy_asset(app: AppHandle, path: String, destination: String) -> Result<FileMutation, String> {
+    let (_, source) = resolve_inside_root(&app, Path::new(&path))?;
+    let (_, destination) = resolve_inside_root(&app, Path::new(&destination))?;
+    if !source.is_file() || !is_animation(&source) || !destination.is_dir() {
+        return Err("El origen o el destino no son validos".to_string());
+    }
+    if extension(&source) == "gltf" {
+        return Err("Para evitar romper dependencias compartidas, la copia fisica de GLTF queda bloqueada; usa GLB, FBX o una carpeta autocontenida".to_string());
+    }
+    let file_name = source.file_name().ok_or("El archivo no tiene nombre")?;
+    let target = destination.join(file_name);
+    if target.exists() {
+        return Err("Ya existe un archivo con ese nombre en el destino".to_string());
+    }
+    fs::copy(&source, &target)
+        .map_err(|error| format!("No se pudo copiar la animacion: {error}"))?;
+    Ok(FileMutation {
+        old_id: stable_id(&source),
+        new_id: stable_id(&target),
+        new_path: path_string(&target),
+    })
+}
+
+#[tauri::command]
+fn move_asset(app: AppHandle, path: String, destination: String) -> Result<FileMutation, String> {
+    let (_, source) = resolve_inside_root(&app, Path::new(&path))?;
+    let (_, destination) = resolve_inside_root(&app, Path::new(&destination))?;
+    if !source.is_file() || !is_animation(&source) || !destination.is_dir() {
+        return Err("El origen o el destino no son validos".to_string());
+    }
+    if extension(&source) == "gltf" {
+        return Err("Para evitar romper dependencias compartidas, mueve la carpeta autocontenida del GLTF desde Windows".to_string());
+    }
+    let target = destination.join(source.file_name().ok_or("El archivo no tiene nombre")?);
+    if target.exists() {
+        return Err("Ya existe un archivo con ese nombre en el destino".to_string());
+    }
+    let old_id = stable_id(&source);
+    fs::rename(&source, &target)
+        .map_err(|error| format!("No se pudo mover la animacion: {error}"))?;
+    let new_id = stable_id(&target);
+    migrate_metadata_id(&app, &old_id, &new_id)?;
+    Ok(FileMutation {
+        old_id,
+        new_id,
+        new_path: path_string(&target),
+    })
+}
+
+#[tauri::command]
 async fn read_asset_bytes(app: AppHandle, path: String) -> Result<AssetBytes, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (root, file) = resolve_inside_root(&app, Path::new(&path))?;
@@ -737,7 +1165,8 @@ fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
 fn reveal_file(app: AppHandle, path: String) -> Result<(), String> {
     let (_, file) = resolve_inside_root(&app, Path::new(&path))?;
     Command::new("explorer.exe")
-        .arg(format!("/select,{}", path_string(&file)))
+        .arg("/select,")
+        .arg(&file)
         .spawn()
         .map_err(|error| format!("No se pudo mostrar el archivo: {error}"))?;
     Ok(())
@@ -754,18 +1183,38 @@ fn main() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                window.show()?;
-                window.set_focus()?;
-            }
+            let existing_window = app.get_webview_window("main");
+            let window = match existing_window {
+                Some(window) => window,
+                None => {
+                    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                        .title("Biblioteca 3D")
+                        .inner_size(1420.0, 900.0)
+                        .min_inner_size(900.0, 650.0)
+                        .build()?
+                }
+            };
+            window.show()?;
+            window.set_focus()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_initial_state,
             get_catalog_data,
             save_animation_metadata,
+            save_category,
+            delete_category,
+            reorder_categories,
+            export_catalog,
+            create_database_backup,
+            get_diagnostics,
+            restore_database_backup,
             scan_library,
             list_folder,
+            create_folder,
+            rename_asset,
+            copy_asset,
+            move_asset,
             read_asset_bytes,
             open_folder,
             reveal_file

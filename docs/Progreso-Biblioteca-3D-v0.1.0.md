@@ -1,6 +1,6 @@
 # Progreso de Biblioteca 3D — v0.1.0
 
-Fecha de actualización: 9 de septiembre de 2026.
+Fecha de actualización: 10 de septiembre de 2026.
 
 Plan de referencia: `Plan-Biblioteca-Animaciones-3D-v1.0.0.md`.
 
@@ -61,3 +61,16 @@ Plan de referencia: `Plan-Biblioteca-Animaciones-3D-v1.0.0.md`.
 Continuar con la administración de categorías y grupos desde la interfaz en la etapa 5. Antes de publicar o generar un instalador se debe repetir la verificación de identidad.
 
 
+
+
+## Actualización final de interfaz y entrega
+
+- Biblioteca actual quedó ubicada en la cabecera superior con acceso al árbol de carpetas.
+- Las categorías ocupan la columna izquierda, siguiendo la estructura de Estampas Roxwana.
+- El visor permanece en la columna central y el catálogo de animaciones en la derecha.
+- Archivos y metadatos conservan el panel inferior; Nombre, Tipo, Tamaño y Modificado tienen columnas propias.
+- Los controles de reproducción se distribuyeron en dos filas internas para impedir que invadan la columna de animaciones.
+- Los filtros de formato y orden se conservaron dentro de un menú compacto.
+- Se validaron build web, fixture GLTF, cuatro pruebas Rust y 50 FBX reales: 49 reproducibles y uno dañado aislado.
+- Se generó el instalador versionado Biblioteca-3D-v0.1.0-x64-Setup.exe.
+- La verificación visual se hizo dentro de Codex; la ventana nativa permaneció cerrada.

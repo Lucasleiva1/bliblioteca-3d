@@ -1,4 +1,4 @@
-const VERSION = "v0.1.0";
+const VERSION = "v0.1.1";
 
 export function thumbnailForAnimation(fileName: string) {
   const name = fileName.toLocaleLowerCase();

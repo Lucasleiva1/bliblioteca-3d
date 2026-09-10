@@ -1,7 +1,7 @@
 {
   "name": "biblioteca-3d",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1430",
@@ -27,6 +27,7 @@
     "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "^4.3.3",
     "jsdom": "^25.0.1",
+    "sharp": "^0.34.3",
     "typescript": "^5.9.3",
     "vite": "^6.4.3",
     "vitest": "^5.0.0"
