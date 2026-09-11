@@ -18,6 +18,10 @@ export interface AnimationAsset {
   format: AnimationFormat;
   size: number;
   modified: number;
+  /** Fecha de la miniatura vigente en `_cache`; 0 si falta o quedó vieja. */
+  thumbnailModified: number;
+  /** La miniatura ya falló para esta versión del archivo. */
+  thumbnailFailed: boolean;
 }
 
 export interface FolderEntry {
@@ -43,12 +47,14 @@ export interface FolderContents {
   entries: FolderEntry[];
 }
 
-export interface AssetBytes {
-  bytes: number[];
+export interface AssetPackage {
+  bytes: ArrayBuffer;
   directory: string;
+  /** Imágenes cercanas a un FBX, para encontrar texturas guardadas con rutas de otra computadora. */
+  textures: string[];
   resources: Array<{
     uri: string;
-    bytes: number[];
+    bytes: ArrayBuffer;
     mimeType: string;
   }>;
 }
@@ -56,6 +62,7 @@ export interface AssetBytes {
 export interface Category {
   id: string;
   name: string;
+  section: CategorySection;
   sortOrder: number;
 }
 
@@ -71,6 +78,54 @@ export interface AnimationMetadata {
 export interface CatalogData {
   categories: Category[];
   metadata: AnimationMetadata[];
+}
+
+/** Grupo al que pertenece una categoría: "piece", "animation" o "group:<nombre de carpeta>". */
+export type CategorySection = string;
+
+export interface ImportedFolder {
+  name: string;
+  categoryName: string;
+  /** Carpeta del grupo donde entró (Piezas, Animaciones, contruccion...). */
+  groupName: string;
+  /** Solo lo que entra al grupo Animaciones cuenta como animación. */
+  animation: boolean;
+  merged: boolean;
+  assets: AnimationAsset[];
+}
+
+export interface PendingImport {
+  /** Grupo cuya carpeta Cargar Nuevo tiene este elemento esperando. */
+  groupName: string;
+  name: string;
+  reason: string;
+  waiting: boolean;
+}
+
+export interface ImportReport {
+  rootPath: string;
+  imported: ImportedFolder[];
+  pending: PendingImport[];
+}
+
+export interface CategoryGroup {
+  id: string;
+  section: CategorySection;
+  name: string;
+  sortOrder: number;
+  collapsed: boolean;
+}
+
+export interface PhysicalCategoryLayout {
+  categoryKey: string;
+  section: CategorySection;
+  groupId: string;
+  sortOrder: number;
+}
+
+export interface CategoryOrganization {
+  groups: CategoryGroup[];
+  categories: PhysicalCategoryLayout[];
 }
 
 export interface FileMutation {

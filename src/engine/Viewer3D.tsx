@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   Box,
   ChevronLeft,
@@ -19,7 +17,7 @@ import {
   StepForward,
   Tag,
 } from "lucide-react";
-import { readAssetBytes } from "../lib/api";
+import { createStudioEnvironment, disposeObject, loadThreeAsset } from "./assetLoader";
 import { formatBytes, formatDate, parentFolderName } from "../lib/format";
 import type { AnimationAsset } from "../lib/types";
 
@@ -63,12 +61,13 @@ function boundsIncludingBones(root: THREE.Object3D) {
   return box;
 }
 
-function normalizeForViewer(root: THREE.Object3D) {
+function normalizeForViewer(root: THREE.Object3D, fit: "character" | "object" = "character") {
   let box = boundsIncludingBones(root);
   if (box.isEmpty()) return;
-  const height = box.getSize(new THREE.Vector3()).y;
-  if (Number.isFinite(height) && height > 0.0001) {
-    const scale = THREE.MathUtils.clamp(TARGET_CHARACTER_HEIGHT / height, 0.0001, 10_000);
+  const size = box.getSize(new THREE.Vector3());
+  const referenceSize = fit === "object" ? Math.max(size.x, size.y, size.z) : size.y;
+  if (Number.isFinite(referenceSize) && referenceSize > 0.0001) {
+    const scale = THREE.MathUtils.clamp(TARGET_CHARACTER_HEIGHT / referenceSize, 0.0001, 10_000);
     root.scale.multiplyScalar(scale);
     box = boundsIncludingBones(root);
   }
@@ -297,26 +296,6 @@ function updateMannequin(mannequin: MannequinRuntime) {
   for (const update of mannequin.updates) update();
 }
 
-function disposeMaterial(material: THREE.Material) {
-  for (const value of Object.values(material)) {
-    if (value instanceof THREE.Texture) value.dispose();
-  }
-  material.dispose();
-}
-
-function disposeObject(root: THREE.Object3D) {
-  root.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    mesh.geometry?.dispose();
-    const material = mesh.material;
-    if (Array.isArray(material)) material.forEach(disposeMaterial);
-    else if (material) disposeMaterial(material);
-    const skinned = object as THREE.SkinnedMesh;
-    skinned.skeleton?.dispose();
-  });
-  root.removeFromParent();
-}
-
 function disposeHelper(helper: THREE.SkeletonHelper) {
   helper.geometry.dispose();
   const material = helper.material;
@@ -333,6 +312,8 @@ function formatTime(value: number) {
 
 export default function Viewer3D({
   asset,
+  companionModel,
+  assetKind,
   characterBody,
   characterBones,
   autoplay,
@@ -344,6 +325,8 @@ export default function Viewer3D({
   onEditMetadata,
 }: {
   asset: AnimationAsset | null;
+  companionModel: AnimationAsset | null;
+  assetKind: "piece" | "animation";
   characterBody: "male" | "female";
   characterBones: boolean;
   autoplay: boolean;
@@ -372,6 +355,7 @@ export default function Viewer3D({
   const loopRef = useRef(true);
   const showSkeletonRef = useRef(false);
   const showMeshRef = useRef(true);
+  const isPiece = assetKind === "piece";
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { speedRef.current = speed; }, [speed]);
@@ -402,12 +386,17 @@ export default function Viewer3D({
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z, 0.25);
     runtime.controls.target.copy(center);
-    runtime.camera.position.set(center.x + radius * 0.62, center.y + radius * 0.22, center.z + radius * 2.25);
+    if (isPiece) {
+      const viewDirection = new THREE.Vector3(1, 0.62, 1).normalize();
+      runtime.camera.position.copy(center).addScaledVector(viewDirection, radius * 2.35);
+    } else {
+      runtime.camera.position.set(center.x + radius * 0.62, center.y + radius * 0.22, center.z + radius * 2.25);
+    }
     runtime.camera.near = Math.max(0.001, radius / 1000);
     runtime.camera.far = Math.max(1000, radius * 100);
     runtime.camera.updateProjectionMatrix();
     runtime.controls.update();
-  }, []);
+  }, [isPiece]);
 
   const stopPlayback = useCallback(() => {
     const runtime = runtimeRef.current;
@@ -503,6 +492,10 @@ export default function Viewer3D({
     const grid = new THREE.GridHelper(20, 20, 0x6e5845, 0x303438);
     grid.name = "viewer-grid";
     scene.add(hemi, key, rim, grid);
+    // Sin un entorno que reflejar, las piezas metálicas se ven negras.
+    const environment = createStudioEnvironment(renderer);
+    scene.environment = environment;
+    scene.environmentIntensity = 0.6;
     const runtime: ViewerRuntime = {
       renderer, scene, camera, controls, clock: new THREE.Clock(), mixer: null,
       root: null, skeleton: null, clips: [], activeClip: 0, mannequin: null, hasModelMesh: false,
@@ -543,6 +536,7 @@ export default function Viewer3D({
       if (runtime.root) disposeObject(runtime.root);
       if (runtime.skeleton) disposeHelper(runtime.skeleton);
       if (runtime.mannequin) disposeObject(runtime.mannequin.group);
+      environment.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       runtimeRef.current = null;
@@ -553,12 +547,12 @@ export default function Viewer3D({
     const runtime = runtimeRef.current;
     if (!runtime) return;
     runtime.scene.getObjectByName("viewer-grid")!.visible = showGrid;
-    runtime.root?.traverse((object) => {
+    if (!isPiece) runtime.root?.traverse((object) => {
       if ((object as THREE.Mesh).isMesh || (object as THREE.SkinnedMesh).isSkinnedMesh) object.visible = showMesh;
     });
-    if (runtime.skeleton) runtime.skeleton.visible = showSkeleton;
-    if (runtime.mannequin) runtime.mannequin.group.visible = showMesh && !runtime.hasModelMesh;
-  }, [showGrid, showMesh, showSkeleton]);
+    if (runtime.skeleton) runtime.skeleton.visible = (!isPiece && showSkeleton) || (isPiece && !runtime.hasModelMesh);
+    if (runtime.mannequin) runtime.mannequin.group.visible = !isPiece && showMesh && !runtime.hasModelMesh;
+  }, [isPiece, showGrid, showMesh, showSkeleton]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -586,34 +580,21 @@ export default function Viewer3D({
       return;
     }
     setState("loading");
-    void readAssetBytes(asset.path).then(async ({ bytes, directory, resources }) => {
-      const buffer = Uint8Array.from(bytes).buffer;
-      let root: THREE.Object3D;
-      let loadedClips: THREE.AnimationClip[];
-      if (asset.format === "fbx") {
-        const result = new FBXLoader().parse(buffer, `${directory}/`);
-        root = result;
-        loadedClips = result.animations;
-      } else {
-        const data = asset.format === "gltf" ? new TextDecoder().decode(buffer) : buffer;
-        const manager = new THREE.LoadingManager();
-        const resourceUrls = new Map<string, string>();
-        for (const resource of resources) {
-          const objectUrl = URL.createObjectURL(new Blob([Uint8Array.from(resource.bytes)], { type: resource.mimeType }));
-          resourceUrls.set(resource.uri.replaceAll("\\", "/").replace(/^\.\//, ""), objectUrl);
-        }
-        manager.setURLModifier((url) => {
-          const normalized = url.replaceAll("\\", "/").replace(/^\.\//, "");
-          return resourceUrls.get(normalized) ?? url;
-        });
-        let result;
+    void loadThreeAsset(asset).then(async (loadedAsset) => {
+      let root = loadedAsset.root;
+      const loadedClips = loadedAsset.clips;
+      if (isPiece && root.getObjectByProperty("isMesh", true) === undefined && companionModel) {
         try {
-          result = await new GLTFLoader(manager).parseAsync(data, "");
-        } finally {
-          resourceUrls.forEach((url) => URL.revokeObjectURL(url));
+          const loadedModel = await loadThreeAsset(companionModel);
+          if (loadedModel.root.getObjectByProperty("isMesh", true) !== undefined) {
+            disposeObject(root);
+            root = loadedModel.root;
+          } else {
+            disposeObject(loadedModel.root);
+          }
+        } catch (companionError) {
+          console.warn(`No se pudo cargar la malla compañera ${companionModel.path}`, companionError);
         }
-        root = result.scene;
-        loadedClips = result.animations;
       }
       if (generation !== loadGeneration.current || !runtimeRef.current) {
         disposeObject(root);
@@ -624,6 +605,7 @@ export default function Viewer3D({
         if (mesh.isMesh) {
           mesh.castShadow = false;
           mesh.receiveShadow = false;
+          if (isPiece) return;
           const sourceMaterial = mesh.material;
           const hadMultipleMaterials = Array.isArray(sourceMaterial);
           const materials: THREE.Material[] = hadMultipleMaterials ? sourceMaterial : [sourceMaterial];
@@ -637,7 +619,7 @@ export default function Viewer3D({
           mesh.material = hadMultipleMaterials ? transparentMaterials : transparentMaterials[0];
         }
       });
-      normalizeForViewer(root);
+      normalizeForViewer(root, isPiece ? "object" : "character");
       runtime.hasModelMesh = root.getObjectByProperty("isMesh", true) !== undefined;
       if (!runtime.hasModelMesh) {
         root.position.y += TARGET_CHARACTER_HEIGHT * 0.026;
@@ -647,7 +629,7 @@ export default function Viewer3D({
       runtime.clips = loadedClips.filter((clip) => Number.isFinite(clip.duration) && clip.duration > 0);
       runtime.activeClip = 0;
       runtime.scene.add(root);
-      const mannequin = !runtime.hasModelMesh ? createProceduralHumanoid(root, characterBody) : null;
+      const mannequin = !isPiece && !runtime.hasModelMesh ? createProceduralHumanoid(root, characterBody) : null;
       if (generation !== loadGeneration.current || !runtimeRef.current) {
         if (mannequin) disposeObject(mannequin.group);
         return;
@@ -659,7 +641,7 @@ export default function Viewer3D({
         updateMannequin(mannequin);
       }
       const skeleton = new THREE.SkeletonHelper(root);
-      skeleton.visible = showSkeletonRef.current;
+      skeleton.visible = (!isPiece && showSkeletonRef.current) || (isPiece && !runtime.hasModelMesh);
       runtime.skeleton = skeleton;
       runtime.scene.add(skeleton);
       runtime.mixer = new THREE.AnimationMixer(root);
@@ -680,7 +662,7 @@ export default function Viewer3D({
       setError(String(loadError));
       setState("error");
     });
-  }, [asset, autoplay, characterBody, frameObject]);
+  }, [asset, autoplay, characterBody, companionModel, frameObject, isPiece]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -694,8 +676,8 @@ export default function Viewer3D({
   return (
     <section className="viewer-panel" aria-label="Visor 3D">
       <div className="viewer-toolbar">
-        <button className={showMesh ? "active" : ""} aria-pressed={showMesh} onClick={() => setShowMesh((value) => !value)} title="Mostrar u ocultar personaje o maniquí translúcido"><Box size={16} /><span>Personaje</span></button>
-        <button className={showSkeleton ? "active" : ""} aria-pressed={showSkeleton} onClick={() => setSkeletonPreference(!showSkeleton)} title="Mostrar u ocultar esqueleto"><ScanLine size={16} /><span>Esqueleto</span></button>
+        {!isPiece && <button className={showMesh ? "active" : ""} aria-pressed={showMesh} onClick={() => setShowMesh((value) => !value)} title="Mostrar u ocultar personaje o maniquí translúcido"><Box size={16} /><span>Personaje</span></button>}
+        {!isPiece && <button className={showSkeleton ? "active" : ""} aria-pressed={showSkeleton} onClick={() => setSkeletonPreference(!showSkeleton)} title="Mostrar u ocultar esqueleto"><ScanLine size={16} /><span>Esqueleto</span></button>}
         <button className={showGrid ? "active" : ""} aria-pressed={showGrid} onClick={() => setShowGrid((value) => !value)} title="Mostrar u ocultar cuadrícula"><Grid3X3 size={16} /><span>Grid</span></button>
         <span className="toolbar-spacer" />
         <button onClick={onPrevious} disabled={!canPrevious} title="Animacion anterior"><ChevronLeft size={16} /></button>
@@ -704,10 +686,10 @@ export default function Viewer3D({
         <button onClick={frameObject} disabled={!asset} title="Restablecer cámara"><RotateCcw size={16} /></button>
       </div>
       <div className="viewer-canvas" ref={hostRef}>
-        {state === "empty" && <div className="viewer-message"><Box size={46} /><strong>Elegí una animación</strong><span>FBX, GLB o GLTF</span></div>}
+        {state === "empty" && <div className="viewer-message"><Box size={46} /><strong>Elegí una pieza o animación</strong><span>FBX, GLB o GLTF</span></div>}
         {state === "loading" && <div className="viewer-message"><span className="loader" /><strong>Cargando {asset?.fileName}</strong></div>}
-        {state === "error" && <div className="viewer-message error"><strong>No se pudo abrir esta animación</strong><span>{error}</span></div>}
-        {state === "ready" && clips.length === 0 && <div className="viewer-message compact"><strong>El archivo no contiene clips de animación</strong></div>}
+        {state === "error" && <div className="viewer-message error"><strong>No se pudo abrir este archivo 3D</strong><span>{error}</span></div>}
+        {state === "ready" && clips.length === 0 && !isPiece && <div className="viewer-message compact"><strong>El archivo no contiene clips de animación</strong></div>}
       </div>
       <div className="file-strip">
         {asset ? (
@@ -720,7 +702,7 @@ export default function Viewer3D({
             <button onClick={onReveal} title="Abrir la carpeta y marcar este archivo" aria-label="Abrir la carpeta y marcar este archivo"><FolderOpen size={16} /></button>
             <button onClick={onEditMetadata} title="Editar metadatos" aria-label="Editar metadatos"><Tag size={16} /></button>
           </>
-        ) : <span className="file-strip-empty">Sin animación seleccionada</span>}
+        ) : <span className="file-strip-empty">Sin elemento seleccionado</span>}
       </div>
       <div className="transport">
         <button onClick={stopPlayback} disabled={!clips.length} title="Detener y volver al inicio"><SkipBack size={17} /></button>
