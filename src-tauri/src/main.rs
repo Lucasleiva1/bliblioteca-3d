@@ -2243,6 +2243,7 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ImportWatcherState::default())
         .setup(|app| {
             let existing_window = app.get_webview_window("main");

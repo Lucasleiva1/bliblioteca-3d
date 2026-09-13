@@ -295,6 +295,18 @@ body.resizing { cursor: col-resize; user-select: none; }
 .theme-buttons button { min-width: 110px; padding: 0 12px; }
 .theme-buttons button.active { border-color: #805040; background: var(--accent-soft); }
 
+.update-card { display: grid; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
+.update-card > div:first-child { display: grid; gap: 4px; }
+.update-card > div:first-child strong { font-size: 12px; }
+.update-card > div:first-child span { color: var(--muted); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.update-actions button { min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--panel-3); }
+.update-actions button.update-install { color: #fff; border-color: #934438; background: #a83f32; }
+.update-progress { height: 5px; overflow: hidden; border-radius: 999px; background: var(--line-soft); }
+.update-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+.update-toggle { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.update-toggle input { accent-color: var(--accent); }
+
 
 .maintenance-buttons { display: flex; flex-wrap: wrap; gap: 7px; }
 .maintenance-buttons button { min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--panel-2); }

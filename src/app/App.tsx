@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getVersion } from "@tauri-apps/api/app";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   Box,
   Boxes,
@@ -76,6 +78,71 @@ function BrandSettings({ onClose, onCatalogChange, onError }: { onClose: () => v
   const [characterBody, setCharacterBodyState] = useState<"male" | "female">(() => localStorage.getItem("biblioteca-3d-character-body") === "female" ? "female" : "male");
   const [autoplay, setAutoplayState] = useState(() => localStorage.getItem("biblioteca-3d-autoplay") !== "false");
   const [maintenanceNotice, setMaintenanceNotice] = useState("");
+  const [appVersion, setAppVersion] = useState("");
+  const [automaticUpdateCheck, setAutomaticUpdateCheckState] = useState(() => localStorage.getItem("biblioteca-3d-automatic-update-check") !== "false");
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "current" | "available" | "downloading" | "error">("idle");
+  const [updateNotice, setUpdateNotice] = useState("");
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
+  const automaticCheckStarted = useRef(false);
+
+  const setAutomaticUpdateCheck = (value: boolean) => {
+    setAutomaticUpdateCheckState(value);
+    localStorage.setItem("biblioteca-3d-automatic-update-check", String(value));
+  };
+  const checkForUpdates = useCallback(async (silent = false) => {
+    if (!isDesktopRuntime()) return;
+    setUpdateStatus("checking");
+    setUpdateProgress(0);
+    if (!silent) setUpdateNotice("Buscando una versión nueva...");
+    try {
+      const update = await check({ timeout: 30_000 });
+      setPendingUpdate(update);
+      if (update) {
+        setUpdateStatus("available");
+        setUpdateNotice(`Versión ${update.version} disponible${update.body ? `: ${update.body}` : "."}`);
+      } else {
+        setUpdateStatus("current");
+        setUpdateNotice("Biblioteca 3D está actualizada.");
+      }
+    } catch (value) {
+      setPendingUpdate(null);
+      setUpdateStatus("error");
+      setUpdateNotice(`No se pudo comprobar la actualización: ${String(value)}`);
+    }
+  }, []);
+  const installUpdate = async () => {
+    if (!pendingUpdate) return;
+    setUpdateStatus("downloading");
+    setUpdateProgress(0);
+    setUpdateNotice(`Descargando Biblioteca 3D ${pendingUpdate.version}...`);
+    let downloaded = 0;
+    let total = 0;
+    try {
+      await pendingUpdate.downloadAndInstall((event) => {
+        if (event.event === "Started") total = event.data.contentLength ?? 0;
+        if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          if (total > 0) setUpdateProgress(Math.min(100, Math.round((downloaded / total) * 100)));
+        }
+        if (event.event === "Finished") {
+          setUpdateProgress(100);
+          setUpdateNotice("Descarga completa. Cerrando para instalar la actualización...");
+        }
+      });
+    } catch (value) {
+      setUpdateStatus("error");
+      setUpdateNotice(`No se pudo instalar la actualización: ${String(value)}`);
+    }
+  };
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    void getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+    if (automaticUpdateCheck && !automaticCheckStarted.current) {
+      automaticCheckStarted.current = true;
+      void checkForUpdates(true);
+    }
+  }, [automaticUpdateCheck, checkForUpdates]);
   const saveName = (value: string) => {
     setName(value);
     localStorage.setItem("biblioteca-3d-brand-name", value);
@@ -171,6 +238,18 @@ function BrandSettings({ onClose, onCatalogChange, onError }: { onClose: () => v
           <div className="theme-buttons">
             <button className={characterBones ? "active" : ""} aria-pressed={characterBones} onClick={() => setCharacterBones(true)}><ScanLine size={17} /> Con palitos</button>
             <button className={!characterBones ? "active" : ""} aria-pressed={!characterBones} onClick={() => setCharacterBones(false)}><Box size={17} /> Sin palitos</button>
+          </div>
+        </div>
+        <div className="settings-section">
+          <div className="section-title"><Download size={18} /><div><strong>Actualizaciones</strong><span>Busca versiones firmadas publicadas oficialmente en GitHub.</span></div></div>
+          <div className="update-card">
+            <div><strong>Biblioteca 3D {appVersion ? `v${appVersion}` : ""}</strong><span>{updateNotice || "Podés comprobar ahora si existe una versión nueva."}</span></div>
+            {updateStatus === "downloading" && <div className="update-progress" aria-label={`Descarga ${updateProgress}%`}><span style={{ width: `${updateProgress}%` }} /></div>}
+            <div className="update-actions">
+              <button onClick={() => void checkForUpdates()} disabled={updateStatus === "checking" || updateStatus === "downloading"}><RefreshCw className={updateStatus === "checking" ? "spin" : ""} size={16} /> {updateStatus === "checking" ? "Buscando…" : "Buscar actualizaciones"}</button>
+              {pendingUpdate && <button className="update-install" onClick={() => void installUpdate()} disabled={updateStatus === "downloading"}><Download size={16} /> {updateStatus === "downloading" ? `Descargando ${updateProgress}%` : `Instalar v${pendingUpdate.version}`}</button>}
+            </div>
+            <label className="update-toggle"><input type="checkbox" checked={automaticUpdateCheck} onChange={(event) => setAutomaticUpdateCheck(event.target.checked)} /> Buscar automáticamente al abrir Ajustes</label>
           </div>
         </div>
         <div className="settings-section">

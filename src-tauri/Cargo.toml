@@ -1,6 +1,6 @@
 [package]
 name = "biblioteca-3d"
-version = "0.1.7"
+version = "0.1.8"
 description = "Biblioteca 3D"
 authors = ["Biblioteca 3D"]
 edition = "2021"
@@ -17,6 +17,7 @@ sha2 = "0.10"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 walkdir = "2"
 
 [dev-dependencies]
