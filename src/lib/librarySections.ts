@@ -82,8 +82,8 @@ export function collectLibraryGroups(assets: AnimationAsset[], folders: FolderNo
 }
 
 /**
- * Categor\u00edas f\u00edsicas de todos los grupos. Una carpeta dentro de Categor\u00eda sin ning\u00fan FBX, GLB ni
- * GLTF que la app pueda leer no aparece hasta que tenga alguno.
+ * Categor\u00edas f\u00edsicas de todos los grupos. Una carpeta dentro de Categor\u00eda sin ning\u00fan FBX, GLB,
+ * GLTF ni BVH que la app pueda leer no aparece hasta que tenga alguno.
  */
 export function collectPhysicalCategories(assets: AnimationAsset[], folders: FolderNode[] = []): PhysicalCategory[] {
   const categories = new Map<string, PhysicalCategory>();

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createStudioEnvironment, disposeObject, dropMissingTextures, hasMesh, loadThreeAsset } from "./assetLoader";
+import { createProceduralHumanoid, updateMannequin, type MannequinRuntime } from "./Viewer3D";
 import type { AnimationAsset } from "../lib/types";
 
 /** Se dibuja al doble y se reduce, así los bordes quedan suaves sin depender del antialias. */
@@ -10,6 +11,25 @@ const TEXTURE_WAIT_MS = 4000;
 const EXPOSURE = 1.05;
 /** Segunda toma más iluminada para piezas oscuras de verdad (pelo negro, plástico oscuro). */
 const RESCUE_EXPOSURE = 2.8;
+const ANIMATION_SAMPLES = 24;
+const SAMPLE_EDGE = 0.05;
+
+export interface PoseCandidate {
+  time: number;
+  displacement: number;
+  span: number;
+  change: number;
+}
+
+/** Selecciona una pose legible: distinta del reposo, extendida y no solo un cuadro de transición. */
+export function selectExpressivePose(candidates: PoseCandidate[]) {
+  return candidates.reduce<PoseCandidate | null>((best, candidate) => {
+    const score = candidate.displacement * 0.7 + Math.max(0, candidate.span - 0.75) * 0.22 + candidate.change * 0.08;
+    if (!best) return candidate;
+    const bestScore = best.displacement * 0.7 + Math.max(0, best.span - 0.75) * 0.22 + best.change * 0.08;
+    return score > bestScore ? candidate : best;
+  }, null);
+}
 
 /** Qué tanto de la foto ocupa la pieza y qué parte de ella tiene luz, a partir de los píxeles RGBA. */
 export function measurePhoto(pixels: Uint8Array, step = 4) {
@@ -93,16 +113,65 @@ function forceOpaque(root: THREE.Object3D) {
   });
 }
 
-function applyFirstFrame(root: THREE.Object3D, clips: THREE.AnimationClip[]) {
+function centeredBonePoints(root: THREE.Object3D) {
+  const points: THREE.Vector3[] = [];
+  root.updateMatrixWorld(true);
+  root.traverse((object) => {
+    if ((object as THREE.Bone).isBone) points.push(object.getWorldPosition(new THREE.Vector3()));
+  });
+  if (!points.length) return points;
+  const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(1 / points.length);
+  return points.map((point) => point.sub(center));
+}
+
+function pointSpan(points: THREE.Vector3[]) {
+  if (!points.length) return 0;
+  return new THREE.Box3().setFromPoints(points).getSize(new THREE.Vector3()).length();
+}
+
+function averagePoseDistance(left: THREE.Vector3[], right: THREE.Vector3[]) {
+  const count = Math.min(left.length, right.length);
+  if (!count) return 0;
+  let total = 0;
+  for (let index = 0; index < count; index += 1) total += left[index].distanceTo(right[index]);
+  return total / count;
+}
+
+/** Recorre el clip y deja aplicada la pose más representativa sin usar IA ni alterar el archivo. */
+function applyExpressiveFrame(root: THREE.Object3D, clips: THREE.AnimationClip[]) {
   const clip = clips.find((item) => Number.isFinite(item.duration) && item.duration > 0);
-  if (!clip || !isSkinned(root)) return;
+  if (!clip) return;
   try {
     const mixer = new THREE.AnimationMixer(root);
-    mixer.clipAction(clip).play();
+    mixer.clipAction(clip).reset().play();
     mixer.setTime(0);
     root.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(root);
-    if (box.isEmpty() || !Number.isFinite(box.min.x + box.max.x + box.min.y + box.max.y)) mixer.stopAllAction();
+    const baseline = centeredBonePoints(root);
+    if (baseline.length >= 3) {
+      const scale = Math.max(pointSpan(baseline), 1e-6);
+      const candidates: PoseCandidate[] = [];
+      let previous = baseline;
+      for (let index = 0; index < ANIMATION_SAMPLES; index += 1) {
+        const fraction = SAMPLE_EDGE + (index / (ANIMATION_SAMPLES - 1)) * (1 - SAMPLE_EDGE * 2);
+        const time = clip.duration * fraction;
+        mixer.setTime(time);
+        root.updateMatrixWorld(true);
+        const points = centeredBonePoints(root);
+        if (points.length !== baseline.length || points.some((point) => !Number.isFinite(point.x + point.y + point.z))) continue;
+        candidates.push({
+          time,
+          displacement: averagePoseDistance(baseline, points) / scale,
+          span: pointSpan(points) / scale,
+          change: averagePoseDistance(previous, points) / scale,
+        });
+        previous = points;
+      }
+      const selected = selectExpressivePose(candidates);
+      mixer.setTime(selected?.time ?? clip.duration * 0.35);
+    } else {
+      // Animaciones rígidas o por morph targets: un tercio del clip suele mostrar mejor la acción que el reposo.
+      mixer.setTime(clip.duration * 0.35);
+    }
   } catch {
     // Si la animación no encaja con el modelo, queda la pose original.
   }
@@ -120,7 +189,20 @@ function framingPoints(root: THREE.Object3D) {
     if (box.isEmpty()) return;
     for (const px of [box.min.x, box.max.x]) for (const py of [box.min.y, box.max.y]) for (const pz of [box.min.z, box.max.z]) points.push(new THREE.Vector3(px, py, pz));
   });
+  if (!points.length) {
+    root.traverse((object) => {
+      if ((object as THREE.Bone).isBone) points.push(object.getWorldPosition(new THREE.Vector3()));
+    });
+  }
   return points;
+}
+
+function disposeSkeletonHelper(helper: THREE.SkeletonHelper) {
+  helper.geometry.dispose();
+  const material = helper.material;
+  if (Array.isArray(material)) material.forEach((item) => item.dispose());
+  else material.dispose();
+  helper.removeFromParent();
 }
 
 class ThumbnailRenderer {
@@ -155,6 +237,8 @@ class ThumbnailRenderer {
     const loaded = await loadThreeAsset(asset);
     let root = loaded.root;
     let texturesReady = loaded.texturesReady;
+    let mannequin: MannequinRuntime | null = null;
+    let skeleton: THREE.SkeletonHelper | null = null;
     if (!hasMesh(root) && companion) {
       try {
         const model = await loadThreeAsset(companion);
@@ -170,14 +254,30 @@ class ThumbnailRenderer {
       }
     }
     try {
-      if (!hasMesh(root)) throw new Error("No tiene forma visible: es solo animación y no se encontró su modelo");
       await Promise.race([texturesReady, new Promise((resolve) => window.setTimeout(resolve, TEXTURE_WAIT_MS))]);
       dropMissingTextures(root);
       showBothFaces(root);
-      applyFirstFrame(root, loaded.clips);
+      applyExpressiveFrame(root, loaded.clips);
       this.scene.add(root);
+      let visibleRoot = root;
+      if (!hasMesh(root)) {
+        mannequin = createProceduralHumanoid(root, "male");
+        if (mannequin) {
+          updateMannequin(mannequin);
+          this.scene.add(mannequin.group);
+          visibleRoot = mannequin.group;
+        } else {
+          skeleton = new THREE.SkeletonHelper(root);
+          for (const material of Array.isArray(skeleton.material) ? skeleton.material : [skeleton.material]) {
+            if (material instanceof THREE.LineBasicMaterial) material.color.set(0xc6d3ff);
+          }
+          this.scene.add(skeleton);
+          visibleRoot = root;
+        }
+      }
       root.updateMatrixWorld(true);
-      this.frame(root);
+      visibleRoot.updateMatrixWorld(true);
+      this.frame(visibleRoot, Boolean(mannequin || skeleton));
       let problem = this.shoot(EXPOSURE);
       if (problem?.includes("vacía")) {
         forceOpaque(root);
@@ -192,17 +292,20 @@ class ThumbnailRenderer {
       if (problem) throw new Error(problem);
       return await this.encode();
     } finally {
+      if (mannequin) disposeObject(mannequin.group);
+      if (skeleton) disposeSkeletonHelper(skeleton);
       disposeObject(root);
     }
   }
 
-  private frame(root: THREE.Object3D) {
-    const box = new THREE.Box3().setFromObject(root);
+  private frame(root: THREE.Object3D, character = false) {
+    const points = framingPoints(root);
+    const box = new THREE.Box3().setFromPoints(points);
     if (box.isEmpty()) throw new Error("La pieza no tiene tamaño");
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.length() / 2, 1e-4);
-    const direction = chooseCameraDirection({ size, skinned: isSkinned(root) });
+    const direction = chooseCameraDirection({ size, skinned: character || isSkinned(root) });
 
     const camera = this.camera;
     camera.up.set(0, 1, 0);
@@ -213,7 +316,7 @@ class ThumbnailRenderer {
 
     const inverse = camera.matrixWorldInverse;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const point of framingPoints(root)) {
+    for (const point of points) {
       point.applyMatrix4(inverse);
       minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
       minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);

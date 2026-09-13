@@ -1,4 +1,4 @@
-export type AnimationFormat = "fbx" | "glb" | "gltf";
+export type AnimationFormat = "fbx" | "glb" | "gltf" | "bvh";
 
 export interface FolderNode {
   name: string;

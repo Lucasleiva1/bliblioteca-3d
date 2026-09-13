@@ -1,6 +1,6 @@
 [package]
 name = "biblioteca-3d"
-version = "0.1.8"
+version = "0.1.9"
 description = "Biblioteca 3D"
 authors = ["Biblioteca 3D"]
 edition = "2021"

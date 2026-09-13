@@ -38,7 +38,7 @@ interface ViewerRuntime {
   hasModelMesh: boolean;
 }
 
-interface MannequinRuntime {
+export interface MannequinRuntime {
   group: THREE.Group;
   joints: Array<{ bone: THREE.Bone; mesh: THREE.Mesh }>;
   segments: Array<{ from: THREE.Bone; to: THREE.Bone; mesh: THREE.Mesh }>;
@@ -77,7 +77,57 @@ function normalizeForViewer(root: THREE.Object3D, fit: "character" | "object" = 
   }
 }
 
-function createProceduralHumanoid(root: THREE.Object3D, bodyType: "male" | "female"): MannequinRuntime | null {
+function objectDepth(object: THREE.Object3D) {
+  let depth = 0;
+  for (let parent = object.parent; parent; parent = parent.parent) depth += 1;
+  return depth;
+}
+
+/**
+ * Algunos FBX con el personaje dividido en cuerpo, cabeza, piernas y pies traen una copia anidada
+ * del mismo armature por cada malla. Mostrar todas esas copias produce líneas superpuestas que
+ * titilan; la copia más profunda es una jerarquía completa y limpia para la vista opcional.
+ */
+function representativeSkeleton(root: THREE.Object3D) {
+  const candidates: Array<{ skeleton: THREE.Skeleton; depth: number }> = [];
+  root.traverse((object) => {
+    const mesh = object as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh || !mesh.skeleton.bones.length) return;
+    const bones = new Set(mesh.skeleton.bones);
+    const candidate = mesh.skeleton.bones.find((bone) => !bone.parent || !bones.has(bone.parent as THREE.Bone)) ?? mesh.skeleton.bones[0];
+    candidates.push({ skeleton: mesh.skeleton, depth: objectDepth(candidate) });
+  });
+  candidates.sort((left, right) => left.depth - right.depth);
+  return candidates[0]?.skeleton ?? null;
+}
+
+export function representativeSkeletonRoot(root: THREE.Object3D) {
+  return representativeSkeleton(root)?.bones[0] ?? root;
+}
+
+export function createViewerSkeletonHelper(root: THREE.Object3D) {
+  const helper = new THREE.SkeletonHelper(root);
+  const skeleton = representativeSkeleton(root);
+  if (skeleton) {
+    // SkeletonHelper recorre todos los Bone del objeto, pero estos FBX contienen copias anidadas.
+    // Limitamos sus líneas a los huesos de una sola malla, sin tocar el rig que deforma el modelo.
+    helper.bones = skeleton.bones;
+    const segmentCount = skeleton.bones.filter((bone) => bone.parent && (bone.parent as THREE.Bone).isBone).length;
+    helper.geometry.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(segmentCount * 2 * 3), 3));
+    helper.geometry.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(segmentCount * 2 * 3), 3));
+    helper.setColors(new THREE.Color(0x7f9fff), new THREE.Color(0xdce6ff));
+  }
+  const materials = Array.isArray(helper.material) ? helper.material : [helper.material];
+  for (const material of materials) {
+    material.depthTest = false;
+    material.transparent = true;
+    material.opacity = 0.72;
+  }
+  helper.renderOrder = 10;
+  return helper;
+}
+
+export function createProceduralHumanoid(root: THREE.Object3D, bodyType: "male" | "female"): MannequinRuntime | null {
   root.updateMatrixWorld(true);
   const bones = new Map<string, THREE.Bone>();
   root.traverse((object) => {
@@ -279,7 +329,7 @@ function createProceduralHumanoid(root: THREE.Object3D, bodyType: "male" | "fema
   return { group, joints: [], segments: [], updates };
 }
 
-function updateMannequin(mannequin: MannequinRuntime) {
+export function updateMannequin(mannequin: MannequinRuntime) {
   const from = new THREE.Vector3();
   const to = new THREE.Vector3();
   const direction = new THREE.Vector3();
@@ -347,12 +397,14 @@ export default function Viewer3D({
   const [clipIndex, setClipIndex] = useState(0);
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(1);
-  const [loop, setLoop] = useState(true);
+  // Los FBX de captura de movimiento suelen tener desplazamiento real y no terminan donde empiezan.
+  // Repetirlos por defecto hace que el personaje se teletransporte al primer cuadro.
+  const [loop, setLoop] = useState(false);
   const [showMesh, setShowMesh] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(characterBones);
   const [showGrid, setShowGrid] = useState(true);
   const speedRef = useRef(1);
-  const loopRef = useRef(true);
+  const loopRef = useRef(false);
   const showSkeletonRef = useRef(false);
   const showMeshRef = useRef(true);
   const isPiece = assetKind === "piece";
@@ -491,6 +543,8 @@ export default function Viewer3D({
     rim.position.set(-4, 3, -4);
     const grid = new THREE.GridHelper(20, 20, 0x6e5845, 0x303438);
     grid.name = "viewer-grid";
+    // Evita que las líneas y la suela ocupen exactamente el mismo plano y parpadeen al moverse.
+    grid.position.y = -0.003;
     scene.add(hemi, key, rim, grid);
     // Sin un entorno que reflejar, las piezas metálicas se ven negras.
     const environment = createStudioEnvironment(renderer);
@@ -602,22 +656,11 @@ export default function Viewer3D({
       }
       root.traverse((object) => {
         const mesh = object as THREE.Mesh;
-        if (mesh.isMesh) {
-          mesh.castShadow = false;
-          mesh.receiveShadow = false;
-          if (isPiece) return;
-          const sourceMaterial = mesh.material;
-          const hadMultipleMaterials = Array.isArray(sourceMaterial);
-          const materials: THREE.Material[] = hadMultipleMaterials ? sourceMaterial : [sourceMaterial];
-          const transparentMaterials = materials.map((source) => {
-            const material = source.clone();
-            material.transparent = true;
-            material.opacity = 0.42;
-            material.depthWrite = false;
-            return material;
-          });
-          mesh.material = hadMultipleMaterials ? transparentMaterials : transparentMaterials[0];
-        }
+        if (!mesh.isMesh) return;
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        // Se conservan los materiales opacos del archivo. Forzarlos a translucidez provoca ordenado
+        // inestable entre cuerpo, cabeza, piernas y pies mientras el personaje se deforma.
       });
       normalizeForViewer(root, isPiece ? "object" : "character");
       runtime.hasModelMesh = root.getObjectByProperty("isMesh", true) !== undefined;
@@ -640,7 +683,7 @@ export default function Viewer3D({
         runtime.scene.add(mannequin.group);
         updateMannequin(mannequin);
       }
-      const skeleton = new THREE.SkeletonHelper(root);
+      const skeleton = createViewerSkeletonHelper(root);
       skeleton.visible = (!isPiece && showSkeletonRef.current) || (isPiece && !runtime.hasModelMesh);
       runtime.skeleton = skeleton;
       runtime.scene.add(skeleton);
@@ -686,7 +729,7 @@ export default function Viewer3D({
         <button onClick={frameObject} disabled={!asset} title="Restablecer cámara"><RotateCcw size={16} /></button>
       </div>
       <div className="viewer-canvas" ref={hostRef}>
-        {state === "empty" && <div className="viewer-message"><Box size={46} /><strong>Elegí una pieza o animación</strong><span>FBX, GLB o GLTF</span></div>}
+        {state === "empty" && <div className="viewer-message"><Box size={46} /><strong>Elegí una pieza o animación</strong><span>FBX, GLB, GLTF o BVH</span></div>}
         {state === "loading" && <div className="viewer-message"><span className="loader" /><strong>Cargando {asset?.fileName}</strong></div>}
         {state === "error" && <div className="viewer-message error"><strong>No se pudo abrir este archivo 3D</strong><span>{error}</span></div>}
         {state === "ready" && clips.length === 0 && !isPiece && <div className="viewer-message compact"><strong>El archivo no contiene clips de animación</strong></div>}

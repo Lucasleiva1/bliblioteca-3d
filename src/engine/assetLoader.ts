@@ -1,6 +1,8 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as THREE from "three";
-import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import { BVHLoader } from "three/addons/loaders/BVHLoader.js";
+import { repairQuaternionSpikes } from "./animationRepair";
+import { FBXLoader } from "./fbx/FBXLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { TGALoader } from "three/addons/loaders/TGALoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -67,6 +69,17 @@ export interface LoadedThreeAsset {
   texturesReady: Promise<void>;
 }
 
+/** Convierte un BVH de texto en una jerarquía de huesos animable por Three.js. */
+export function parseBvhAsset(bytes: ArrayBuffer): LoadedThreeAsset {
+  const result = new BVHLoader().parse(new TextDecoder().decode(bytes));
+  const rootBone = result.skeleton.bones[0];
+  if (!rootBone) throw new Error("El BVH no contiene un esqueleto válido");
+  const root = new THREE.Group();
+  root.name = "bvh-root";
+  root.add(rootBone);
+  return { root, clips: [result.clip], texturesReady: Promise.resolve() };
+}
+
 /** Cuenta las cargas pendientes de un LoadingManager, para esperar las texturas antes de sacar una foto. */
 function trackPendingLoads(manager: THREE.LoadingManager) {
   let pending = 0;
@@ -89,8 +102,18 @@ function trackPendingLoads(manager: THREE.LoadingManager) {
   return () => (pending ? new Promise<void>((resolve) => waiters.push(resolve)) : Promise.resolve());
 }
 
+export { repairQuaternionSpikes };
+
+/** Carga el archivo y limpia de sus animaciones los cuadros sueltos imposibles (ver animationRepair). */
 export async function loadThreeAsset(asset: AnimationAsset): Promise<LoadedThreeAsset> {
+  const loaded = await readThreeAsset(asset);
+  repairQuaternionSpikes(loaded.clips);
+  return loaded;
+}
+
+async function readThreeAsset(asset: AnimationAsset): Promise<LoadedThreeAsset> {
   const { bytes, directory, resources, textures } = await readAssetPackage(asset.path);
+  if (asset.format === "bvh") return parseBvhAsset(bytes);
   const manager = new THREE.LoadingManager();
   const settled = trackPendingLoads(manager);
   if (asset.format === "fbx") {

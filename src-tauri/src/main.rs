@@ -28,7 +28,7 @@ const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "webp", "bmp"
 const MAX_TEXTURE_CANDIDATES: usize = 4_000;
 const MAX_TEXTURE_SEARCH_ENTRIES: usize = 30_000;
 const DEFAULT_LIBRARY_ROOT: &str = r"D:\biblioteca-3d";
-const ANIMATION_EXTENSIONS: &[&str] = &["fbx", "glb", "gltf"];
+const ANIMATION_EXTENSIONS: &[&str] = &["fbx", "glb", "gltf", "bvh"];
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 /// Cada grupo (carpeta de la raíz de la biblioteca) tiene su propia bandeja con este nombre.
 const IMPORT_DIR: &str = "Cargar Nuevo";
@@ -1273,7 +1273,7 @@ fn import_folder(root: &Path, section_dir: &Path, source: &Path) -> Result<Impor
         return Err("La carpeta está vacía. Se cargará cuando lleguen los archivos".to_string());
     }
     if !files.iter().any(|file| is_animation(file)) {
-        return Err("La carpeta no tiene archivos FBX, GLB ni GLTF".to_string());
+        return Err("La carpeta no tiene archivos FBX, GLB, GLTF ni BVH".to_string());
     }
     if let Some(busy) = files.iter().find(|file| !is_file_ready(&source.join(file))) {
         return Ok(ImportOutcome::Waiting(format!(
@@ -1913,7 +1913,7 @@ fn copy_asset(app: AppHandle, path: String, destination: String) -> Result<FileM
         return Err("El origen o el destino no son validos".to_string());
     }
     if extension(&source) == "gltf" {
-        return Err("Para evitar romper dependencias compartidas, la copia fisica de GLTF queda bloqueada; usa GLB, FBX o una carpeta autocontenida".to_string());
+        return Err("Para evitar romper dependencias compartidas, la copia fisica de GLTF queda bloqueada; usa GLB, FBX, BVH o una carpeta autocontenida".to_string());
     }
     let file_name = source.file_name().ok_or("El archivo no tiene nombre")?;
     let target = destination.join(file_name);
@@ -2089,7 +2089,7 @@ async fn read_asset_package(app: AppHandle, path: String) -> Result<tauri::ipc::
         let (root, file) = resolve_inside_root(&app, Path::new(&path))?;
         if !file.is_file() || !is_animation(&file) {
             return Err(
-                "El archivo no es una animación FBX, GLB o GLTF válida para la biblioteca"
+                "El archivo no es una animación FBX, GLB, GLTF o BVH válida para la biblioteca"
                     .to_string(),
             );
         }
@@ -2128,7 +2128,7 @@ async fn read_asset_package(app: AppHandle, path: String) -> Result<tauri::ipc::
 fn resolve_model(app: &AppHandle, path: &str) -> Result<(PathBuf, fs::Metadata), String> {
     let (_, file) = resolve_inside_root(app, Path::new(path))?;
     if !file.is_file() || !is_animation(&file) {
-        return Err("La miniatura solo puede pertenecer a un FBX, GLB o GLTF".to_string());
+        return Err("La miniatura solo puede pertenecer a un FBX, GLB, GLTF o BVH".to_string());
     }
     let metadata = file
         .metadata()
@@ -2316,15 +2316,16 @@ mod tests {
         fs::create_dir_all(root.join(TECHNICAL_DIR)).unwrap();
         fs::write(root.join("Mixamo").join("Idle.fbx"), b"one").unwrap();
         fs::write(root.join("Mixamo").join("Attack.glb"), b"two").unwrap();
+        fs::write(root.join("Mixamo").join("Walk.bvh"), b"three").unwrap();
         fs::write(root.join(TECHNICAL_DIR).join("ghost.fbx"), b"cache").unwrap();
         let assets = collect_assets(root);
-        assert_eq!(assets.len(), 2);
+        assert_eq!(assets.len(), 3);
         assert_eq!(
             assets
                 .iter()
                 .map(|asset| asset.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Attack", "Idle"]
+            vec!["Attack", "Idle", "Walk"]
         );
     }
 
@@ -2339,9 +2340,10 @@ mod tests {
             b"b",
         )
         .unwrap();
+        fs::write(root.join("Combate").join("Espada").join("Dodge.bvh"), b"c").unwrap();
         let node = build_folder_node(root, &root.join("Combate")).unwrap();
-        assert_eq!(node.animation_count, 2);
-        assert_eq!(node.children[0].animation_count, 1);
+        assert_eq!(node.animation_count, 3);
+        assert_eq!(node.children[0].animation_count, 2);
     }
 
     #[test]

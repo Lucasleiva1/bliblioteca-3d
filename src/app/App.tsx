@@ -66,15 +66,16 @@ type CategoryDragItem = { type: "category"; id: string; section: CategorySection
 type CategoryDropTarget = { type: "category" | "group" | "ungrouped"; id: string; position: "before" | "after" };
 const EMPTY_THUMBNAIL_PROGRESS: ThumbnailProgress = { done: 0, total: 0, failed: 0, running: false, paused: false };
 
-function PieceThumbnail({ asset, modified }: { asset: AnimationAsset; modified: number }) {
+function AssetThumbnail({ asset, modified, animation }: { asset: AnimationAsset; modified: number; animation: boolean }) {
   const url = useThumbnailUrl(asset.path, modified);
-  return url ? <img className="piece-photo" src={url} alt={`Foto de ${asset.name}`} draggable={false} /> : <Box size={27} aria-hidden="true" />;
+  if (url) return <img className="generated-photo" src={url} alt={`Captura de ${asset.name}`} draggable={false} />;
+  return animation ? <img src={thumbnailForAnimation(asset.fileName)} alt={`Boceto temporal de ${asset.name}`} loading="lazy" draggable={false} /> : <Box size={27} aria-hidden="true" />;
 }
 function BrandSettings({ onClose, onCatalogChange, onError }: { onClose: () => void; onCatalogChange: (value: CatalogData) => void; onError: (message: string) => void }) {
   const [name, setName] = useState(() => localStorage.getItem("biblioteca-3d-brand-name") || "Biblioteca 3D");
   const [logo, setLogo] = useState(() => localStorage.getItem("biblioteca-3d-brand-logo") || "");
   const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-  const [characterBones, setCharacterBonesState] = useState(() => localStorage.getItem("biblioteca-3d-character-bones") !== "false");
+  const [characterBones, setCharacterBonesState] = useState(() => localStorage.getItem("biblioteca-3d-character-bones") === "true");
   const [characterBody, setCharacterBodyState] = useState<"male" | "female">(() => localStorage.getItem("biblioteca-3d-character-body") === "female" ? "female" : "male");
   const [autoplay, setAutoplayState] = useState(() => localStorage.getItem("biblioteca-3d-autoplay") !== "false");
   const [maintenanceNotice, setMaintenanceNotice] = useState("");
@@ -279,7 +280,7 @@ export default function App() {
   const [folderPanelOpen, setFolderPanelOpen] = useState(false);
   const [catalogOptionsOpen, setCatalogOptionsOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [formatFilter, setFormatFilter] = useState<"all" | "fbx" | "glb" | "gltf">("all");
+  const [formatFilter, setFormatFilter] = useState<"all" | "fbx" | "glb" | "gltf" | "bvh">("all");
   const [sortOrder, setSortOrder] = useState<"name" | "modified" | "size">("name");
   const [catalogMode, setCatalogMode] = useState<string>("all");
   const [catalogPage, setCatalogPage] = useState(0);
@@ -331,7 +332,7 @@ export default function App() {
   });
   const [leftCollapsed, setLeftCollapsed] = useState(() => localStorage.getItem("biblioteca-3d-left-collapsed") === "true");
   const [brandRevision, setBrandRevision] = useState(0);
-  const [characterBones, setCharacterBones] = useState(() => localStorage.getItem("biblioteca-3d-character-bones") !== "false");
+  const [characterBones, setCharacterBones] = useState(() => localStorage.getItem("biblioteca-3d-character-bones") === "true");
   const [characterBody, setCharacterBody] = useState<"male" | "female">(() => localStorage.getItem("biblioteca-3d-character-body") === "female" ? "female" : "male");
   const [autoplay, setAutoplay] = useState(() => localStorage.getItem("biblioteca-3d-autoplay") !== "false");
   const brandName = localStorage.getItem("biblioteca-3d-brand-name") || "Biblioteca 3D";
@@ -398,7 +399,7 @@ export default function App() {
   useEffect(() => {
     const refreshBrand = () => setBrandRevision((value) => value + 1);
     const refreshCharacter = () => {
-      setCharacterBones(localStorage.getItem("biblioteca-3d-character-bones") !== "false");
+      setCharacterBones(localStorage.getItem("biblioteca-3d-character-bones") === "true");
       setCharacterBody(localStorage.getItem("biblioteca-3d-character-body") === "female" ? "female" : "male");
       setAutoplay(localStorage.getItem("biblioteca-3d-autoplay") !== "false");
     };
@@ -417,7 +418,7 @@ export default function App() {
       const incoming = report.imported.flatMap((folder) => folder.assets);
       setLibrary((current) => ({ ...current, animations: mergeImportedAssets(current.animations, incoming) }));
       libraryAssetsRef.current = mergeImportedAssets(libraryAssetsRef.current, incoming);
-      thumbnailQueueRef.current?.add(incoming.filter((asset) => !isAnimationSection(classifyAsset(asset.relativePath).section)), true);
+      thumbnailQueueRef.current?.add(incoming, true);
       setImportNotices((current) => [
         ...current,
         ...report.imported.map((folder, index) => ({ id: `${Date.now()}-${index}-${folder.name}`, text: describeImportedFolder(folder), categoryKey: importCategoryKey(folder) })),
@@ -464,11 +465,11 @@ export default function App() {
     libraryAssetsRef.current = library.animations;
   }, [library.animations]);
 
-  // Al abrir o reescanear la biblioteca, la fila de fotos pasa a ser solo las piezas que no tienen.
+  // Al abrir o reescanear la biblioteca, la fila pasa a ser todo lo que todavía no tiene captura.
   useEffect(() => {
     if (!isDesktopRuntime()) return;
     setThumbnailResults(new Map());
-    thumbnailQueue.reset(library.animations.filter((asset) => !isAnimationSection(classifyAsset(asset.relativePath).section)));
+    thumbnailQueue.reset(library.animations);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [library.rootPath, library.scannedAt, thumbnailQueue]);
 
@@ -1022,12 +1023,12 @@ export default function App() {
             <button
               className={`thumbnail-progress${thumbnailProgress.paused ? " paused" : ""}`}
               onClick={() => (thumbnailProgress.paused ? thumbnailQueue.resume() : thumbnailQueue.pause())}
-              title={`${thumbnailProgress.paused ? "Fotos en pausa. Tocá para seguir." : "Sacando fotos de las piezas. Tocá para pausar."}${thumbnailProgress.failed ? ` ${thumbnailProgress.failed} no se pudieron sacar y quedan con la caja gris.` : ""}`}
-              aria-label={thumbnailProgress.paused ? "Seguir sacando fotos" : "Pausar las fotos"}
+              title={`${thumbnailProgress.paused ? "Capturas en pausa. Tocá para seguir." : "Generando capturas de piezas y animaciones. Tocá para pausar."}${thumbnailProgress.failed ? ` ${thumbnailProgress.failed} no se pudieron generar y conservan su imagen temporal.` : ""}`}
+              aria-label={thumbnailProgress.paused ? "Seguir generando capturas" : "Pausar las capturas"}
             >
               {thumbnailProgress.paused ? <Play size={15} /> : <Pause size={15} />}
               <Camera size={15} aria-hidden="true" />
-              <span>Fotos {thumbnailProgress.done} / {thumbnailProgress.total}</span>
+              <span>Capturas {thumbnailProgress.done} / {thumbnailProgress.total}</span>
               <i style={{ width: `${Math.round((thumbnailProgress.done / thumbnailProgress.total) * 100)}%` }} aria-hidden="true" />
             </button>
           )}
@@ -1158,7 +1159,7 @@ export default function App() {
               <button className={catalogOptionsOpen || formatFilter !== "all" || sortOrder !== "name" ? "active" : ""} aria-expanded={catalogOptionsOpen} onClick={() => setCatalogOptionsOpen((value) => !value)} title="Filtrar y ordenar"><ListFilter size={15} /></button>
               {catalogOptionsOpen && <div className="catalog-filter-popover">
                 <label>Formato<select value={formatFilter} onChange={(event) => setFormatFilter(event.target.value as typeof formatFilter)}>
-                  <option value="all">Todos</option><option value="fbx">FBX</option><option value="glb">GLB</option><option value="gltf">GLTF</option>
+                  <option value="all">Todos</option><option value="fbx">FBX</option><option value="glb">GLB</option><option value="gltf">GLTF</option><option value="bvh">BVH</option>
                 </select></label>
                 <label>Orden<select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as typeof sortOrder)}>
                   <option value="name">Nombre</option><option value="modified">Recientes</option><option value="size">Tamaño</option>
@@ -1190,14 +1191,14 @@ export default function App() {
                 onClick={() => setSelected(asset)}
                 onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(asset); } }}
               >
-                <div className={`animation-thumb format-${asset.format} ${!isAnimationSection(placementById.get(asset.id)?.section) ? "piece-thumb" : ""}`}>{!isAnimationSection(placementById.get(asset.id)?.section) ? <PieceThumbnail asset={asset} modified={thumbnailResults.get(asset.id)?.thumbnailModified ?? asset.thumbnailModified} /> : <img src={thumbnailForAnimation(asset.fileName)} alt={`Boceto de ${asset.name}`} loading="lazy" draggable={false} />}<span>{asset.format.toUpperCase()}</span></div>
+                <div className={`animation-thumb format-${asset.format} generated-thumb`}><AssetThumbnail asset={asset} modified={thumbnailResults.get(asset.id)?.thumbnailModified ?? asset.thumbnailModified} animation={isAnimationSection(placementById.get(asset.id)?.section)} /><span>{asset.format.toUpperCase()}</span></div>
                 <div className="animation-meta"><strong title={asset.fileName}>{metadataById.get(asset.id)?.gameName || asset.name}</strong><span>{isAnimationSection(placementById.get(asset.id)?.section) ? "Animación" : "Pieza"} ·{metadataById.get(asset.id)?.gameName ? `${asset.name} · ` : ""}{formatBytes(asset.size)} · {asset.format.toUpperCase()}</span></div>
                 <div className="animation-actions">
                   <button draggable={false} className={favoriteIds.has(asset.id) ? "favorite active" : "favorite"} aria-pressed={favoriteIds.has(asset.id)} onClick={(event) => { event.stopPropagation(); toggleFavorite(asset.id); }} title={favoriteIds.has(asset.id) ? "Quitar de favoritas" : "Agregar a favoritas"} aria-label={favoriteIds.has(asset.id) ? "Quitar de favoritas" : "Agregar a favoritas"}><Heart size={15} fill={favoriteIds.has(asset.id) ? "currentColor" : "none"} /></button>
                 </div>
               </article>
             ))}
-            {!visibleAnimations.length && <div className="catalog-empty"><Box size={30} /><strong>{library.rootPath ? "No hay elementos en esta sección" : "Tu biblioteca aparecerá acá"}</strong><span>Formatos: FBX, GLB y GLTF</span></div>}
+            {!visibleAnimations.length && <div className="catalog-empty"><Box size={30} /><strong>{library.rootPath ? "No hay elementos en esta sección" : "Tu biblioteca aparecerá acá"}</strong><span>Formatos: FBX, GLB, GLTF y BVH</span></div>}
           </div>
           <footer className="catalog-footer">
             <span>{visibleAnimations.length} {visibleAnimations.length === 1 ? "elemento" : "elementos"}</span>

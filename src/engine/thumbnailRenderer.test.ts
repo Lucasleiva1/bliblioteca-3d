@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseCameraDirection, isCharacterShape, measurePhoto, photoProblem } from "./thumbnailRenderer";
+import { chooseCameraDirection, isCharacterShape, measurePhoto, photoProblem, selectExpressivePose } from "./thumbnailRenderer";
 
 function photo(fill: (index: number) => [number, number, number, number], pixels = 1000) {
   const data = new Uint8Array(pixels * 4);
@@ -42,5 +42,20 @@ describe("encuadre", () => {
 
   it("una baldosa plana se mira desde arriba", () => {
     expect(chooseCameraDirection({ size: { x: 2, y: 0.1, z: 2 }, skinned: false }).y).toBeGreaterThan(0.7);
+  });
+});
+
+describe("selección automática de pose", () => {
+  it("elige el momento con mayor cambio y extensión corporal", () => {
+    const selected = selectExpressivePose([
+      { time: 0.1, displacement: 0.02, span: 1, change: 0.02 },
+      { time: 0.5, displacement: 0.46, span: 1.24, change: 0.08 },
+      { time: 0.8, displacement: 0.2, span: 0.92, change: 0.28 },
+    ]);
+    expect(selected?.time).toBe(0.5);
+  });
+
+  it("no falla si el clip no produjo candidatos válidos", () => {
+    expect(selectExpressivePose([])).toBeNull();
   });
 });
