@@ -186,6 +186,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .viewer-message strong { color: #e7e1da; }
 .viewer-message span { max-width: 65%; font-size: 12px; overflow-wrap: anywhere; }
 .viewer-message.error { padding: 28px; color: #e58b80; background: rgb(17 19 21 / 86%); }
+.viewer-message.error span { max-height: 60%; overflow: auto; pointer-events: auto; }
 .viewer-message.compact { justify-content: flex-start; padding-top: 23px; }
 .file-strip { min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0 10px; overflow: hidden; border-top: 1px solid var(--line); background: var(--panel); }
 .file-format { flex: 0 0 auto; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--gold); background: var(--panel-2); font-size: 9px; font-weight: 800; letter-spacing: .7px; }

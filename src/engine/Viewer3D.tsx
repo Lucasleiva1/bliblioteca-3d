@@ -18,6 +18,7 @@ import {
   Tag,
 } from "lucide-react";
 import { createStudioEnvironment, disposeObject, loadThreeAsset } from "./assetLoader";
+import { formatAssetError } from "./assetError";
 import { formatBytes, formatDate, parentFolderName } from "../lib/format";
 import type { AnimationAsset } from "../lib/types";
 
@@ -140,9 +141,10 @@ export function createProceduralHumanoid(root: THREE.Object3D, bodyType: "male" 
   const spine = bone("spine");
   const spine1 = bone("spine1") ?? spine;
   const spine2 = bone("spine2", "chest") ?? spine1;
-  const neck = bone("neck");
+  // Kimodo (y otros BVH) numera el cuello en dos tramos y llama "HeadEnd" a la punta de la cabeza.
+  const neck = bone("neck", "neck1");
   const head = bone("head");
-  const headTop = bone("headtopend", "headtop");
+  const headTop = bone("headtopend", "headtop", "headend");
   if (!hips || !spine1 || !spine2 || !neck || !head) return null;
 
   const leftArm = bone("leftarm", "leftupperarm");
@@ -308,8 +310,10 @@ export function createProceduralHumanoid(root: THREE.Object3D, bodyType: "male" 
     const upperArm = bone(`${side}arm`, `${side}upperarm`);
     const foreArm = bone(`${side}forearm`, `${side}lowerarm`);
     const hand = bone(`${side}hand`);
-    const upperLeg = bone(`${side}upleg`, `${side}thigh`);
-    const lowerLeg = bone(`${side}leg`, `${side}calf`, `${side}lowerleg`);
+    // En Mixamo "Leg" es la pantorrilla; en Kimodo "Leg" es el muslo y "Shin" la pantorrilla.
+    const shinNaming = !bone(`${side}upleg`, `${side}thigh`) && Boolean(bone(`${side}shin`));
+    const upperLeg = shinNaming ? bone(`${side}leg`) : bone(`${side}upleg`, `${side}thigh`);
+    const lowerLeg = shinNaming ? bone(`${side}shin`) : bone(`${side}leg`, `${side}calf`, `${side}lowerleg`);
     const foot = bone(`${side}foot`);
     const toe = bone(`${side}toebase`, `${side}toeend`, `${side}toe`);
 
@@ -327,6 +331,15 @@ export function createProceduralHumanoid(root: THREE.Object3D, bodyType: "male" 
   }
 
   return { group, joints: [], segments: [], updates };
+}
+
+/**
+ * Si el archivo no trae cuerpo y tampoco se pudo armar el maniquí (huesos con nombres que no
+ * reconocemos), el esqueleto es lo único que hay para ver: se muestra aunque esté apagado.
+ */
+function skeletonVisible(runtime: Pick<ViewerRuntime, "hasModelMesh" | "mannequin">, isPiece: boolean, showSkeleton: boolean) {
+  if (runtime.hasModelMesh) return !isPiece && showSkeleton;
+  return isPiece || showSkeleton || !runtime.mannequin;
 }
 
 export function updateMannequin(mannequin: MannequinRuntime) {
@@ -604,7 +617,7 @@ export default function Viewer3D({
     if (!isPiece) runtime.root?.traverse((object) => {
       if ((object as THREE.Mesh).isMesh || (object as THREE.SkinnedMesh).isSkinnedMesh) object.visible = showMesh;
     });
-    if (runtime.skeleton) runtime.skeleton.visible = (!isPiece && showSkeleton) || (isPiece && !runtime.hasModelMesh);
+    if (runtime.skeleton) runtime.skeleton.visible = skeletonVisible(runtime, isPiece, showSkeleton);
     if (runtime.mannequin) runtime.mannequin.group.visible = !isPiece && showMesh && !runtime.hasModelMesh;
   }, [isPiece, showGrid, showMesh, showSkeleton]);
 
@@ -684,7 +697,7 @@ export default function Viewer3D({
         updateMannequin(mannequin);
       }
       const skeleton = createViewerSkeletonHelper(root);
-      skeleton.visible = (!isPiece && showSkeletonRef.current) || (isPiece && !runtime.hasModelMesh);
+      skeleton.visible = skeletonVisible(runtime, isPiece, showSkeletonRef.current);
       runtime.skeleton = skeleton;
       runtime.scene.add(skeleton);
       runtime.mixer = new THREE.AnimationMixer(root);
@@ -702,7 +715,7 @@ export default function Viewer3D({
       frameObject();
     }).catch((loadError) => {
       if (generation !== loadGeneration.current) return;
-      setError(String(loadError));
+      setError(formatAssetError(loadError));
       setState("error");
     });
   }, [asset, autoplay, characterBody, companionModel, frameObject, isPiece]);
